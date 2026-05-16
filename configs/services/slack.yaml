@@ -1,0 +1,29 @@
+services:
+  slack:
+    base_url: https://slack.com/api
+    auth:
+      type: bearer
+    actions:
+      post_message:
+        method: POST
+        path: /chat.postMessage
+        params:
+          channel: string
+          text: string
+      list_channels:
+        method: GET
+        path: /conversations.list
+        params:
+          limit: "int?"
+      list_users:
+        method: GET
+        path: /users.list
+        params:
+          limit: "int?"
+      add_reaction:
+        method: POST
+        path: /reactions.add
+        params:
+          channel: string
+          name: string
+          timestamp: string

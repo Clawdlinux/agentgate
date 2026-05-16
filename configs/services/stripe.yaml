@@ -1,0 +1,28 @@
+services:
+  stripe:
+    base_url: https://api.stripe.com/v1
+    auth:
+      type: bearer
+    actions:
+      list_invoices:
+        method: GET
+        path: /invoices
+        params:
+          customer: "string?"
+          limit: "int?"
+      list_customers:
+        method: GET
+        path: /customers
+        params:
+          limit: "int?"
+          email: "string?"
+      create_charge:
+        method: POST
+        path: /charges
+        params:
+          amount: int
+          currency: string
+          source: "string?"
+      get_balance:
+        method: GET
+        path: /balance

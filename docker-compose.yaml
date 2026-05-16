@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  agentgate:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - AGENTGATE_VAULT_KEY=dev-key-change-in-production!!
+      - AGENTGATE_ADMIN_SECRET=admin-dev-secret-change-me!!
+      - AGENT_API_KEY=ag_dev_test_key_for_local_dev
+    volumes:
+      - agentgate-data:/data
+      - ./configs:/etc/agentgate/configs
+
+volumes:
+  agentgate-data:
