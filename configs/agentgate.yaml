@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+vault:
+  encryption_key_env: "AGENTGATE_VAULT_KEY"
+
+database:
+  driver: "sqlite3"
+  dsn: "./data/agentgate.db"
+
+services_dir: "./configs/services"
+
+admin:
+  secret_env: "AGENTGATE_ADMIN_SECRET"
+
+rate_limits:
+  stripe:
+    requests_per_second: 25
+  github:
+    requests_per_hour: 5000
+  slack:
+    requests_per_minute: 60

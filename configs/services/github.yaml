@@ -1,0 +1,38 @@
+services:
+  github:
+    base_url: https://api.github.com
+    auth:
+      type: oauth2
+      authorize_url: https://github.com/login/oauth/authorize
+      token_url: https://github.com/login/oauth/access_token
+      scopes: [repo, read:org, read:user]
+    actions:
+      list_repos:
+        method: GET
+        path: /user/repos
+        params:
+          type: "string?"
+          sort: "string?"
+          per_page: "int?"
+      list_issues:
+        method: GET
+        path: /repos/{owner}/{repo}/issues
+        params:
+          owner: string
+          repo: string
+          state: "string?"
+      create_issue:
+        method: POST
+        path: /repos/{owner}/{repo}/issues
+        params:
+          owner: string
+          repo: string
+          title: string
+          body: "string?"
+      list_pulls:
+        method: GET
+        path: /repos/{owner}/{repo}/pulls
+        params:
+          owner: string
+          repo: string
+          state: "string?"

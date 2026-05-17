@@ -1,0 +1,16 @@
+FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 go build -o /agentgate ./cmd/agentgw
+
+FROM alpine:3.21
+RUN apk add --no-cache sqlite-libs ca-certificates
+COPY --from=builder /agentgate /usr/local/bin/agentgate
+COPY configs/ /etc/agentgate/configs/
+RUN mkdir -p /data
+EXPOSE 8080
+ENTRYPOINT ["agentgate"]
+CMD ["--config", "/etc/agentgate/configs/services.yaml", "--addr", ":8080"]

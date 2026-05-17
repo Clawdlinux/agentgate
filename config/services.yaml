@@ -1,0 +1,84 @@
+# Agent Gateway — Service Registry
+# Each service defines its API base URL, auth method, and available actions.
+# Agents call POST /v1/act with { service, action, on_behalf_of, params }.
+# The gateway injects auth from the token vault — agents never see credentials.
+
+services:
+  github:
+    base_url: https://api.github.com
+    auth:
+      type: oauth2
+      authorize_url: https://github.com/login/oauth/authorize
+      token_url: https://github.com/login/oauth/access_token
+      scopes: [repo, read:org, read:user]
+    actions:
+      list_repos:
+        method: GET
+        path: /user/repos
+        params:
+          type: "string?"
+          sort: "string?"
+          per_page: "int?"
+      get_repo:
+        method: GET
+        path: /repos/{owner}/{repo}
+        params:
+          owner: string
+          repo: string
+      create_issue:
+        method: POST
+        path: /repos/{owner}/{repo}/issues
+        params:
+          owner: string
+          repo: string
+          title: string
+          body: "string?"
+          labels: "string[]?"
+      list_issues:
+        method: GET
+        path: /repos/{owner}/{repo}/issues
+        params:
+          owner: string
+          repo: string
+          state: "string?"
+
+  stripe:
+    base_url: https://api.stripe.com/v1
+    auth:
+      type: bearer
+    actions:
+      list_customers:
+        method: GET
+        path: /customers
+        params:
+          limit: "int?"
+          email: "string?"
+      list_invoices:
+        method: GET
+        path: /invoices
+        params:
+          customer: "string?"
+          limit: "int?"
+      create_payment_intent:
+        method: POST
+        path: /payment_intents
+        params:
+          amount: int
+          currency: string
+
+  slack:
+    base_url: https://slack.com/api
+    auth:
+      type: bearer
+    actions:
+      post_message:
+        method: POST
+        path: /chat.postMessage
+        params:
+          channel: string
+          text: string
+      list_channels:
+        method: GET
+        path: /conversations.list
+        params:
+          limit: "int?"
