@@ -55,3 +55,16 @@ YAML files in configs/services/. Each defines: name, base_url, auth_type, endpoi
 - ORM / query builder
 - Agent-to-agent communication
 - Multi-tenant isolation (single-tenant MVP)
+
+## Writing Style
+
+All generated text (docs, comments, commit messages, READMEs, social posts) must follow these rules:
+- No em dashes. Use periods.
+- Short sentences. Max 20 words. One idea each.
+- No corporate words: comprehensive, robust, seamless, leverage, utilize, facilitate, streamline.
+- No AI tells: "Here's the thing", rhetorical question openers, triple parallel structure, "Let me be clear".
+- Write like a backend engineer talking to another engineer. Not a press release.
+- Use "you", "we", "I". Not "one", "users", "stakeholders".
+- Numbers as digits. "$8K" not "eight thousand dollars".
+- Contractions fine. Technical terms fine. No dumbing down.
+- See ../WRITING_STYLE.md for full guide with examples.
