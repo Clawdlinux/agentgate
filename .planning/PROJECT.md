@@ -13,10 +13,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 ### Validated
 
 - [x] Agents can invoke registered SaaS actions through `POST /v1/act`.
-- [x] OAuth tokens are stored in an AES-256-GCM encrypted SQLite vault.
-- [x] API keys constrain agent access to configured services and human principals.
+- [x] An AES-256-GCM encrypted SQLite vault implementation exists and is covered by tests.
+- [x] Database-backed API key storage and scope-checking implementations exist.
 - [x] GitHub, Slack, and Stripe service configurations exist.
-- [x] OAuth handlers, rate limiting, a Go SDK, and integration tests exist.
+- [x] OAuth handlers, rate limiting, a Go SDK, and integration tests exist as reusable packages.
 - [x] Audit events can be stored in SQLite, but they are not tamper evident.
 
 ### Active
@@ -51,6 +51,8 @@ Every agent action produces evidence that an independent auditor can verify offl
 The gateway already contains about 4,000 lines of Go and a passing test suite. Existing packages cover authentication, OAuth, proxying, routing, rate limiting, encrypted token storage, and the SDK.
 
 The current audit logger performs plain SQLite inserts through a buffered channel. Its overflow branch drops entries, which cannot support a gap-free receipt chain.
+
+The production command does not yet compose all existing persistence and policy packages. It uses an in-memory vault and a plaintext API-key map, so request-path receipt work must wire verified identities and persistent state before making authorization claims.
 
 The canonical hash-chain reference is `../agentic-operator-core/pkg/audit/chain.go`. Its length-prefixed encoding is reusable, but its HMAC signature is not.
 
