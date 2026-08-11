@@ -144,21 +144,76 @@ Each task uses one pull request with signed-off commits.
 
 ## Traceability
 
-Roadmap creation maps every v1 requirement to exactly one phase.
-
-| Requirement group | Target task | Status |
-|-------------------|-------------|--------|
-| LIC-* | R1 | Pending |
-| RCPT-* | R2 | Pending |
-| KEY-* | R3 | Pending |
-| LEDG-* | R4 | Pending |
-| VER-* | R5 | Pending |
-| QST-* | R9 | Pending |
-| EXPT-* | R6 | Pending |
-| DELG-* | R7 | Pending |
-| CONN-* | R8 | Pending |
-| COMP-* | R10 | Pending |
-| OSS-* | R11 | Pending |
+| Requirement | Phase | PRD task | Status |
+|-------------|-------|----------|--------|
+| LIC-01 | Phase 1 | R1 | Pending |
+| LIC-02 | Phase 1 | R1 | Pending |
+| LIC-03 | Phase 1 | R1 | Pending |
+| LIC-04 | Phase 1 | R1 | Pending |
+| RCPT-01 | Phase 2 | R2 | Pending |
+| RCPT-02 | Phase 2 | R2 | Pending |
+| RCPT-03 | Phase 2 | R2 | Pending |
+| RCPT-04 | Phase 2 | R2 | Pending |
+| RCPT-05 | Phase 2 | R2 | Pending |
+| KEY-01 | Phase 3 | R3 | Pending |
+| KEY-02 | Phase 3 | R3 | Pending |
+| KEY-03 | Phase 3 | R3 | Pending |
+| KEY-04 | Phase 3 | R3 | Pending |
+| KEY-05 | Phase 3 | R3 | Pending |
+| KEY-06 | Phase 3 | R3 | Pending |
+| KEY-07 | Phase 3 | R3 | Pending |
+| LEDG-01 | Phase 4 | R4 | Pending |
+| LEDG-02 | Phase 4 | R4 | Pending |
+| LEDG-03 | Phase 4 | R4 | Pending |
+| LEDG-04 | Phase 4 | R4 | Pending |
+| LEDG-05 | Phase 4 | R4 | Pending |
+| LEDG-06 | Phase 4 | R4 | Pending |
+| LEDG-07 | Phase 4 | R4 | Pending |
+| LEDG-08 | Phase 4 | R4 | Pending |
+| LEDG-09 | Phase 4 | R4 | Pending |
+| LEDG-10 | Phase 4 | R4 | Pending |
+| LEDG-11 | Phase 4 | R4 | Pending |
+| VER-01 | Phase 5 | R5 | Pending |
+| VER-02 | Phase 5 | R5 | Pending |
+| VER-03 | Phase 5 | R5 | Pending |
+| VER-04 | Phase 5 | R5 | Pending |
+| VER-05 | Phase 5 | R5 | Pending |
+| VER-06 | Phase 5 | R5 | Pending |
+| VER-07 | Phase 5 | R5 | Pending |
+| VER-08 | Phase 5 | R5 | Pending |
+| VER-09 | Phase 5 | R5 | Pending |
+| VER-10 | Phase 5 | R5 | Pending |
+| VER-11 | Phase 5 | R5 | Pending |
+| QST-01 | Phase 6 | R9 | Pending |
+| QST-02 | Phase 6 | R9 | Pending |
+| QST-03 | Phase 6 | R9 | Pending |
+| QST-04 | Phase 6 | R9 | Pending |
+| QST-05 | Phase 6 | R9 | Pending |
+| EXPT-01 | Phase 7 | R6 | Pending |
+| EXPT-02 | Phase 7 | R6 | Pending |
+| EXPT-03 | Phase 7 | R6 | Pending |
+| EXPT-04 | Phase 7 | R6 | Pending |
+| EXPT-05 | Phase 7 | R6 | Pending |
+| DELG-01 | Phase 8 | R7 | Pending |
+| DELG-02 | Phase 8 | R7 | Pending |
+| DELG-03 | Phase 8 | R7 | Pending |
+| DELG-04 | Phase 8 | R7 | Pending |
+| DELG-05 | Phase 8 | R7 | Pending |
+| DELG-06 | Phase 8 | R7 | Pending |
+| CONN-01 | Phase 9 | R8 | Pending |
+| CONN-02 | Phase 9 | R8 | Pending |
+| CONN-03 | Phase 9 | R8 | Pending |
+| CONN-04 | Phase 9 | R8 | Pending |
+| COMP-01 | Phase 10 | R10 | Pending |
+| COMP-02 | Phase 10 | R10 | Pending |
+| COMP-03 | Phase 10 | R10 | Pending |
+| COMP-04 | Phase 10 | R10 | Pending |
+| COMP-05 | Phase 10 | R10 | Pending |
+| OSS-01 | Phase 11 | R11 | Pending |
+| OSS-02 | Phase 11 | R11 | Pending |
+| OSS-03 | Phase 11 | R11 | Pending |
+| OSS-04 | Phase 11 | R11 | Pending |
+| OSS-05 | Phase 11 | R11 | Pending |
 
 **Coverage:**
 - v1 requirements: 68 total
@@ -167,4 +222,4 @@ Roadmap creation maps every v1 requirement to exactly one phase.
 
 ---
 *Requirements defined: 2026-08-11*
-*Last updated: 2026-08-11 after project research*
+*Last updated: 2026-08-11 after roadmap creation*
