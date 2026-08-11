@@ -356,17 +356,13 @@ Run this after the licensing files are committed. [VERIFIED: git archive behavio
 | A3 | Future binary packaging needs a separate dependency-license review. | Architecture Patterns | Current release packaging may already include binaries. |
 | A4 | Automated-check timing can let mechanical changes outrun human approval. | Common Pitfalls | Low impact. The explicit merge gate still controls. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Can Shreyansh Sancheti affirm authority over every distributed first-party file?**
-   - What we know: Git history shows one author identity. [VERIFIED: git history]
-   - What's unclear: Employment, contractor, assignment, and imported-code rights. [ASSUMED]
-   - Recommendation: Block merge until the owner personally affirms the tracked record. [VERIFIED: D-03, D-04]
+   - Resolution: Authority is a mandatory blocking human checkpoint. Shreyansh Sancheti must personally record exact `Status: Affirmed`, reviewer, and review-date fields. Pending or uncertain authority stops execution and blocks merge. Git history and sign-off remain supporting evidence only. [VERIFIED: D-03, D-04]
 
 2. **Will this phase produce only a source checkout or also a binary artifact?**
-   - What we know: LIC-02 explicitly names a source checkout. [VERIFIED: REQUIREMENTS.md]
-   - What's unclear: The R1 pull request's release packaging. [ASSUMED]
-   - Recommendation: Keep NOTICE minimal for source. Audit dependency licenses before binary distribution. [ASSUMED]
+   - Resolution: R1 validates the source checkout only. Binary dependency and NOTICE review remain outside Phase 1. They must occur before any binary distribution claim. [VERIFIED: LIC-02, phase boundary]
 
 ## Environment Availability
 
@@ -415,7 +411,7 @@ Then perform the manual owner-attestation check below.
 
 ```bash
 cmp -s LICENSE ../agentic-operator-core/LICENSE
-test "$(cat NOTICE)" = $'AgentGate\nCopyright 2026 Clawdlinux.'
+printf 'AgentGate\nCopyright 2026 Clawdlinux.\n' | cmp -s - NOTICE
 if git ls-files '*.go' | xargs rg -n 'Business Source License|Business Source|BSL'; then exit 1; fi
 rg -n 'Apache License 2\.0.*\[LICENSE\]\(LICENSE\)' README.md
 go test ./cmd/agentgw ./internal/gateway ./internal/registry ./internal/vault
@@ -440,11 +436,11 @@ This check is not automatable. Record the review in the pull request checklist. 
 ```bash
 go test ./...
 
-git diff --check
+git diff --check "$R1_BASELINE...HEAD" -- . ':(exclude).planning/**'
 
 test -s docs/relicense-authorization.md
 cmp -s LICENSE ../agentic-operator-core/LICENSE
-test "$(cat NOTICE)" = $'AgentGate\nCopyright 2026 Clawdlinux.'
+printf 'AgentGate\nCopyright 2026 Clawdlinux.\n' | cmp -s - NOTICE
 
 if git ls-files '*.go' | xargs rg -n 'Business Source License|Business Source|BSL'; then
   exit 1
@@ -462,7 +458,7 @@ After commit, also run the source archive check from `Code Examples`.
 ### Sampling Rate
 
 - **Per task:** Run that task's release checks.
-- **Per plan completion:** Run touched-package tests and `git diff --check`.
+- **Per plan completion:** Run touched-package tests and `git diff --check "$R1_BASELINE...HEAD" -- . ':(exclude).planning/**'`.
 - **Phase gate:** Run all phase checks and manual owner verification.
 - **Merge gate:** Owner affirmation must exist before merge. [VERIFIED: D-04]
 
