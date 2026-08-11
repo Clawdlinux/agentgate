@@ -63,7 +63,7 @@ Establish an accurate Apache License 2.0 release basis for the existing AgentGat
 - `../agentic-operator-core/pkg/audit/chain.go`: Reuse its existing Apache header form.
 
 ### Established Patterns
-- All 11 commits in current repository history and all commits touching the four BSL-marked files have one Git author: Shreyansh Sancheti. This supports review but does not replace D-03.
+- Current repository history and all commits touching the four BSL-marked files have one Git author: Shreyansh Sancheti. This supports review but does not replace D-03.
 - Existing source headers identify the copyright holder as `Clawdlinux`.
 - The repository currently has no root `LICENSE` or `NOTICE` file despite header and README links to `LICENSE`.
 
