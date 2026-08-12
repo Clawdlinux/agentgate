@@ -1,8 +1,6 @@
 /*
 Copyright 2026 Clawdlinux.
-
-Licensed under the Business Source License 1.1.
-See LICENSE in the repository root.
+Licensed under the Apache License, Version 2.0.
 */
 
 // Command agentgw runs the Agent Gateway HTTP server.

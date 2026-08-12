@@ -1,8 +1,6 @@
 /*
 Copyright 2026 Clawdlinux.
-
-Licensed under the Business Source License 1.1.
-See LICENSE in the repository root.
+Licensed under the Apache License, Version 2.0.
 */
 
 // Package gateway implements the HTTP API that agents call to act on SaaS
