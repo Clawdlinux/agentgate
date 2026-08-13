@@ -22,11 +22,11 @@ Each task uses one pull request with signed-off commits.
 
 ### Receipt Protocol
 
-- [ ] **RCPT-01**: A receipt contains every R2 field with fixed types, ordering, limits, and versioned domain separation.
-- [ ] **RCPT-02**: Equivalent decoded parameter objects produce the same SHA-256 digest regardless of JSON whitespace or key order.
-- [ ] **RCPT-03**: Receipts persist no raw parameters, OAuth tokens, upstream bodies, or free-form provider errors.
-- [ ] **RCPT-04**: Independent encoders produce identical canonical bytes for the same fixed receipt.
-- [ ] **RCPT-05**: A checked-in golden fixture covers genesis linkage, Unicode, empty delegation, and integer boundaries.
+- [x] **RCPT-01**: A receipt contains every R2 field with fixed types, ordering, limits, and versioned domain separation.
+- [x] **RCPT-02**: Equivalent decoded parameter objects produce the same SHA-256 digest regardless of JSON whitespace or key order.
+- [x] **RCPT-03**: Receipts persist no raw parameters, OAuth tokens, upstream bodies, or free-form provider errors.
+- [x] **RCPT-04**: Independent encoders produce identical canonical bytes for the same fixed receipt.
+- [x] **RCPT-05**: A checked-in golden fixture covers genesis linkage, Unicode, empty delegation, and integer boundaries.
 
 ### Signing And Trust
 
@@ -150,11 +150,11 @@ Each task uses one pull request with signed-off commits.
 | LIC-02 | Phase 1 | R1 | Complete |
 | LIC-03 | Phase 1 | R1 | Complete |
 | LIC-04 | Phase 1 | R1 | Complete |
-| RCPT-01 | Phase 2 | R2 | Pending |
-| RCPT-02 | Phase 2 | R2 | Pending |
-| RCPT-03 | Phase 2 | R2 | Pending |
-| RCPT-04 | Phase 2 | R2 | Pending |
-| RCPT-05 | Phase 2 | R2 | Pending |
+| RCPT-01 | Phase 2 | R2 | Complete |
+| RCPT-02 | Phase 2 | R2 | Complete |
+| RCPT-03 | Phase 2 | R2 | Complete |
+| RCPT-04 | Phase 2 | R2 | Complete |
+| RCPT-05 | Phase 2 | R2 | Complete |
 | KEY-01 | Phase 3 | R3 | Pending |
 | KEY-02 | Phase 3 | R3 | Pending |
 | KEY-03 | Phase 3 | R3 | Pending |
