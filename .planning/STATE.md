@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 blocked at dependency scan
-last_updated: "2026-08-13T11:23:05.931Z"
+stopped_at: Phase 2 dependency recovery approved
+last_updated: "2026-08-13T11:50:08.167Z"
 last_activity: 2026-08-13 -- Phase 02 execution started
 progress:
   total_phases: 11
@@ -75,7 +75,6 @@ None yet.
 - Phase 4: Focused research must resolve crash boundaries, durable outcomes, and composition-root ownership.
 - Phase 8: Focused research must recheck Biscuit support, issuance, roots, and draft revisions.
 - Phase 10: Focused research must refresh first-party comparison evidence before merge.
-- Phase 2: SkillSpector returned DO_NOT_INSTALL for github.com/go-json-experiment/json commit 4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b because migrate.sh contains recursive source deletion.
 
 ## Deferred Items
 
@@ -87,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-13T11:23:05.926Z
-Stopped at: Phase 2 blocked at dependency scan
-Resume file: .planning/phases/02-receipt-protocol/02-DEPENDENCY-SCAN.md
+Last session: 2026-08-13T11:50:08.162Z
+Stopped at: Phase 2 dependency recovery approved
+Resume file: .planning/phases/02-receipt-protocol/02-01-PLAN.md
