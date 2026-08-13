@@ -50,12 +50,19 @@ func FuzzDigestParams(f *testing.F) {
 }
 
 func FuzzCanonicalHashInput(f *testing.F) {
-	f.Add(uint64(1), uint64(1), "human", "agent")
-	f.Add(^uint64(0), ^uint64(0), "e\u0301", "key")
-	f.Fuzz(func(t *testing.T, sequence, timestamp uint64, human, agent string) {
+	f.Add(uint64(1), uint64(1), "human", "agent", "github", "list_repos", "allow", 200, int64(0), "", "signer", "delegation")
+	f.Add(^uint64(0), ^uint64(0), "e\u0301", "key", "slack", "post_message", "rate_limited", 599, int64(^uint64(0)>>1), "timeout", strings.Repeat("k", 128), strings.Repeat("d", 64))
+	f.Fuzz(func(t *testing.T, sequence, timestamp uint64, human, agent, service, action, policy string, status int, latency int64, errorCode, signer, delegation string) {
 		value := validReceipt()
 		value.Seq, value.TimestampUnixNS = sequence, timestamp
 		value.HumanPrincipal, value.AgentKeyID = human, agent
+		value.Service, value.Action = service, action
+		value.PolicyDecision = policy
+		value.StatusCode = status
+		value.LatencyMS = latency
+		value.Error = errorCode
+		value.SignerKID = signer
+		value.DelegationChain = []string{delegation}
 		first, firstErr := CanonicalHashInput(value)
 		second, secondErr := CanonicalHashInput(value)
 		if (firstErr == nil) != (secondErr == nil) {
@@ -65,6 +72,12 @@ func FuzzCanonicalHashInput(f *testing.F) {
 			if !bytes.Equal(first, second) || &first[0] == &second[0] {
 				t.Fatal("canonical bytes are not independent and repeatable")
 			}
+			frozen := append([]byte(nil), first...)
+			value.DelegationChain[0] += "x"
+			if !bytes.Equal(first, frozen) {
+				t.Fatal("returned preimage changed after caller slice mutation")
+			}
+			value.DelegationChain[0] = delegation
 			hash, err := ComputeEntryHash(value)
 			if err != nil {
 				t.Fatal(err)
@@ -73,13 +86,24 @@ func FuzzCanonicalHashInput(f *testing.F) {
 				t.Fatal("entry hash is not repeatable")
 			}
 			for _, mutation := range []func(*Receipt){
+				func(receipt *Receipt) { receipt.Seq++ },
+				func(receipt *Receipt) { receipt.TimestampUnixNS++ },
+				func(receipt *Receipt) { receipt.HumanPrincipal += "x" },
+				func(receipt *Receipt) { receipt.AgentKeyID += "x" },
+				func(receipt *Receipt) { receipt.DelegationChain = append(receipt.DelegationChain, "extra") },
+				func(receipt *Receipt) { receipt.DelegationChain[0] += "x" },
 				func(receipt *Receipt) { receipt.Service += "x" },
 				func(receipt *Receipt) { receipt.Action += "x" },
 				func(receipt *Receipt) { receipt.ParamsSHA256[0]++ },
-				func(receipt *Receipt) { receipt.PrevHash[0]++ },
 				func(receipt *Receipt) { receipt.PolicyDecision = "deny" },
+				func(receipt *Receipt) { receipt.StatusCode-- },
+				func(receipt *Receipt) { receipt.LatencyMS++ },
+				func(receipt *Receipt) { receipt.Error = "error" },
+				func(receipt *Receipt) { receipt.PrevHash[0]++ },
+				func(receipt *Receipt) { receipt.SignerKID += "x" },
 			} {
 				mutated := value
+				mutated.DelegationChain = append([]string(nil), value.DelegationChain...)
 				mutation(&mutated)
 				mutatedBytes, err := CanonicalHashInput(mutated)
 				if err == nil && bytes.Equal(first, mutatedBytes) {

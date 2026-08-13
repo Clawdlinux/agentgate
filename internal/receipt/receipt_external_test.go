@@ -8,7 +8,9 @@ package receipt_test
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 )
@@ -67,7 +69,7 @@ func validateReferenceAssumptions(t *testing.T, value receipt.Receipt) {
 	if value.Seq == 0 || value.TimestampUnixNS == 0 {
 		t.Fatal("reference receipt uses zero sequence or timestamp")
 	}
-	if value.HumanPrincipal == "" || value.AgentKeyID == "" || value.Service == "" || value.Action == "" || value.SignerKID == "" {
+	if !validReferenceUTF8(value.HumanPrincipal, 256) || !validReferenceUTF8(value.AgentKeyID, 128) || !validReferenceUTF8(value.Service, 64) || !validReferenceUTF8(value.Action, 128) || !validReferenceUTF8(value.SignerKID, 128) {
 		t.Fatal("reference receipt uses an empty required string")
 	}
 	if value.PolicyDecision != "allow" && value.PolicyDecision != "deny" && value.PolicyDecision != "rate_limited" {
@@ -82,13 +84,57 @@ func validateReferenceAssumptions(t *testing.T, value receipt.Receipt) {
 	if len(value.DelegationChain) > 32 {
 		t.Fatalf("reference receipt uses %d delegation elements", len(value.DelegationChain))
 	}
+	for _, element := range value.DelegationChain {
+		if len(element) > 64 || strings.IndexByte(element, 0) >= 0 || !isReferenceASCII(element) {
+			t.Fatalf("reference receipt uses invalid delegation element %q", element)
+		}
+	}
+	if value.Error != "" && !validReferenceErrorCode(value.Error) {
+		t.Fatalf("reference receipt uses invalid error code %q", value.Error)
+	}
 }
 
 func maximumReceipt() receipt.Receipt {
 	value := referenceReceipt()
 	value.Seq = ^uint64(0)
 	value.TimestampUnixNS = ^uint64(0)
+	value.HumanPrincipal = strings.Repeat("h", 256)
+	value.AgentKeyID = strings.Repeat("a", 128)
+	value.DelegationChain = make([]string, 32)
+	for index := range value.DelegationChain {
+		value.DelegationChain[index] = strings.Repeat("d", 64)
+	}
+	value.Service = strings.Repeat("s", 64)
+	value.Action = strings.Repeat("x", 128)
 	value.StatusCode = 599
 	value.LatencyMS = int64(^uint64(0) >> 1)
+	value.Error = strings.Repeat("e", 64)
+	value.SignerKID = strings.Repeat("k", 128)
 	return value
+}
+
+func validReferenceUTF8(value string, maximumBytes int) bool {
+	return value != "" && len(value) <= maximumBytes && utf8.ValidString(value) && strings.IndexByte(value, 0) < 0
+}
+
+func isReferenceASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] > 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validReferenceErrorCode(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '_' {
+			return false
+		}
+	}
+	return true
 }

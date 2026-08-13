@@ -81,8 +81,10 @@ func main() {
 	}
 	manifestBytes = append(manifestBytes, '\n')
 
-	writeExclusive(filepath.Join(*outputDirectory, data.BinaryFile), binaryBytes)
-	writeExclusive(filepath.Join(*outputDirectory, "manifest.json"), manifestBytes)
+	writeExclusivePair(
+		filepath.Join(*outputDirectory, data.BinaryFile), binaryBytes,
+		filepath.Join(*outputDirectory, "manifest.json"), manifestBytes,
+	)
 }
 
 func buildFixture() ([]byte, fixtureReceipt) {
@@ -140,6 +142,49 @@ func writeExclusive(path string, contents []byte) {
 	}
 	if err := file.Close(); err != nil {
 		fatal(err)
+	}
+}
+
+func writeExclusivePair(firstPath string, firstContents []byte, secondPath string, secondContents []byte) {
+	created := []string{}
+	first, err := os.OpenFile(firstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		fatal(err)
+	}
+	created = append(created, firstPath)
+	second, err := os.OpenFile(secondPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		_ = first.Close()
+		removeCreated(created)
+		fatal(err)
+	}
+	created = append(created, secondPath)
+	if _, err := first.Write(firstContents); err != nil {
+		_ = first.Close()
+		_ = second.Close()
+		removeCreated(created)
+		fatal(err)
+	}
+	if _, err := second.Write(secondContents); err != nil {
+		_ = first.Close()
+		_ = second.Close()
+		removeCreated(created)
+		fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		_ = second.Close()
+		removeCreated(created)
+		fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		removeCreated(created)
+		fatal(err)
+	}
+}
+
+func removeCreated(paths []string) {
+	for _, path := range paths {
+		_ = os.Remove(path)
 	}
 }
 

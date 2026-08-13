@@ -18,6 +18,7 @@ import (
 )
 
 type fixtureManifest struct {
+	Version      int    `json:"version"`
 	Domain       string `json:"domain"`
 	BinaryFile   string `json:"binary_file"`
 	BinaryLength int    `json:"binary_length"`
@@ -36,7 +37,9 @@ type fixtureManifest struct {
 		LatencyMS       string   `json:"latency_ms"`
 		Error           string   `json:"error"`
 		PrevHash        string   `json:"prev_hash"`
+		EntryHashNoise  string   `json:"entry_hash_noise"`
 		SignerKID       string   `json:"signer_kid"`
+		SignatureNoise  string   `json:"signature_noise"`
 	} `json:"receipt"`
 }
 
@@ -48,6 +51,15 @@ func TestGoldenFixtures(t *testing.T) {
 	var manifest fixtureManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
+	}
+	if manifest.Version != 1 {
+		t.Fatalf("version = %d, want 1", manifest.Version)
+	}
+	if manifest.Domain != receipt.HashDomainV1 {
+		t.Fatalf("domain = %q, want %q", manifest.Domain, receipt.HashDomainV1)
+	}
+	if manifest.Receipt.EntryHashNoise == "" || manifest.Receipt.SignatureNoise == "" {
+		t.Fatal("derived-field noise must be documented")
 	}
 	binaryBytes, err := os.ReadFile("testdata/v1/" + manifest.BinaryFile)
 	if err != nil {
