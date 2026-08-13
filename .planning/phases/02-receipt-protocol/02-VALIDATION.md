@@ -38,12 +38,12 @@ created: 2026-08-13
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 02-01-01 | 01 | 1 | RCPT-01 | T-02 | Receipt fields, limits, vocabularies, and snapshot semantics are exact. | table and reflection | `go test ./internal/receipt -run 'Test(ReceiptFieldContract|Validate|Snapshot)' -count=1` | No, Wave 0 | pending |
-| 02-01-02 | 01 | 1 | RCPT-02 | One strict parser and RFC 8785 path reject ambiguous JSON and produce stable digests. | unit and property | `go test ./internal/receipt -run 'TestDigestParams' -count=1` | No, Wave 0 | pending |
-| 02-01-02 | 01 | 1 | RCPT-03 | Raw parameters and dependency errors never appear in receipt state or public errors. | sentinel leakage | `go test ./internal/receipt -run 'TestPrivacy' -count=1` | No, Wave 0 | pending |
-| 02-02-01 | 02 | 2 | RCPT-01 | Domain, field order, widths, lengths, and exclusions define one preimage. | binary contract | `go test ./internal/receipt -run 'Test(CanonicalHashInput|ComputeEntryHash)' -count=1` | No, Wave 0 | pending |
-| 02-02-02 | 02 | 2 | RCPT-04 | A black-box reference encoder shares no production encoding helpers. | external package | `go test ./internal/receipt -run 'TestReferenceEncoderAgreement' -count=1` | No, Wave 0 | pending |
-| 02-02-02 | 02 | 2 | RCPT-05 | Immutable binary goldens and manifest hashes remain fixed. | golden contract | `go test ./internal/receipt -run 'TestGoldenFixtures' -count=1` | No, Wave 0 | pending |
+| 02-01-01 | 01 | 1 | RCPT-02 | Supply-chain gate | Dependency scan and pin follow the fixed SkillSpector disposition policy. | static scan and module pin | `test "$(go list -m -f '{{.Version}}' github.com/go-json-experiment/json)" = "v0.0.0-20251027170946-4849db3c2f7e"` | Existing tooling | pending |
+| 02-01-02 | 01 | 1 | RCPT-01 | T-02 | Receipt validation and snapshot semantics enforce exact fields, limits, and vocabularies. | table and reflection | `go test ./internal/receipt -run 'Test(ReceiptFieldContract|Validate|Snapshot)' -count=1` | No, Wave 0 | pending |
+| 02-01-03 | 01 | 1 | RCPT-02, RCPT-03 | T-01, T-03, T-05 | Strict parameter digest and privacy checks reject ambiguity without leaking sensitive input. | unit, property, and sentinel leakage | `go test ./internal/receipt -run 'Test(DigestParams|Privacy)' -count=1` | No, Wave 0 | pending |
+| 02-02-01 | 02 | 2 | RCPT-01 | T-02 | Binary preimage and entry hash fix domain, order, widths, lengths, and exclusions. | binary contract | `go test ./internal/receipt -run 'Test(CanonicalHashInput|ComputeEntryHash)' -count=1` | No, Wave 0 | pending |
+| 02-02-02 | 02 | 2 | RCPT-04 | T-01, T-02, T-05 | Independent encoder and fuzz properties prove agreement, purity, and boundary handling. | external package and fuzz | `go test ./internal/receipt -run 'TestReferenceEncoderAgreement' -count=1` | No, Wave 0 | pending |
+| 02-02-03 | 02 | 2 | RCPT-05 | T-04 | Immutable fixtures and generator checks prove fixed hashes, read-only tests, and no overwrite. | golden contract and generator probe | `go test ./internal/receipt -run 'TestGoldenFixtures' -count=1` | No, Wave 0 | pending |
 
 ---
 

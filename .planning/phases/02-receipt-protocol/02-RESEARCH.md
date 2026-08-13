@@ -553,14 +553,16 @@ The latest external module requires Go 1.26. [VERIFIED: Go module proxy]
 | A1 | The pinned module is acceptable after human supply-chain review. | Standard Stack | Rejection blocks the recommended parser. |
 | A2 | A checked generator under `testdata` is acceptable. | Fixture Architecture | Fixtures need another manual generation method. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Will the project accept an experimental module pinned to an immutable commit?**
-   - What we know: The pin declares Go 1.25 and passed upstream tests. [VERIFIED: local execution]
-   - What's unclear: `slopcheck` was unavailable, and the module is pre-v1. [VERIFIED: local environment]
-   - Recommendation: Add a human dependency checkpoint before `go get`. [RECOMMENDED]
+The dependency policy is fixed. Scan the pinned source before running `go get` or other package installer code.
 
-No protocol decision remains open. Public slices use snapshot semantics. [VERIFIED: Go slice semantics]
+- A pinned static SkillSpector `SAFE` result proceeds automatically.
+- `CAUTION` requires explicit human approval before installation.
+- `DO_NOT_INSTALL`, scan errors, incomplete analysis, or uninspected files block installation.
+- If the package remains blocked, execution stops. No fallback package is selected during Phase 2.
+
+No dependency or protocol question remains open. Public slices use snapshot semantics. [VERIFIED: Go slice semantics]
 
 ## Environment Availability
 
