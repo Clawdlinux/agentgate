@@ -7,12 +7,11 @@ Licensed under the Apache License, Version 2.0.
 //
 // Usage:
 //
-//	agentgw --config ./config/services.yaml --addr :8080
+//	agentgw --config ./config/services.yaml --db ./data/agentgate.db --addr :8080
 package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -22,8 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Clawdlinux/agentgate/internal/auth"
+	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
+	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
+	"github.com/Clawdlinux/agentgate/internal/signer"
 	"github.com/Clawdlinux/agentgate/internal/vault"
 )
 
@@ -32,6 +36,7 @@ var version = "0.1.0-dev"
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	configPath := flag.String("config", "./config/services.yaml", "path to service registry YAML")
+	dbPath := flag.String("db", "./data/agentgate.db", "path to the SQLite database file")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -50,45 +55,71 @@ func main() {
 	}
 	logger.Info("loaded services", "count", reg.Count(), "services", reg.List())
 
-	// Initialize vault.
-	// MVP: random key per process (tokens don't survive restart).
-	// Production: load from VAULT_ENCRYPTION_KEY env var or KMS.
-	encKey := make([]byte, 32)
-	if envKey := os.Getenv("VAULT_ENCRYPTION_KEY"); len(envKey) == 32 {
-		copy(encKey, []byte(envKey))
-	} else {
-		if _, err := rand.Read(encKey); err != nil {
-			logger.Error("generate encryption key", "error", err)
-			os.Exit(1)
-		}
-		logger.Warn("using random encryption key — tokens will not survive restart. Set VAULT_ENCRYPTION_KEY for persistence.")
+	// Open the persistent database and apply every migration. This is the
+	// real composition root: vault, auth, and receipt state all live here
+	// now, not in memory (LEDG-02).
+	database, err := agentgatedb.Open(*dbPath)
+	if err != nil {
+		logger.Error("open database", "error", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+	if err := agentgatedb.RunMigrations(database); err != nil {
+		logger.Error("run migrations", "error", err)
+		os.Exit(1)
 	}
 
-	store, err := vault.NewMemoryStore(encKey)
+	masterKey, err := loadMasterKey()
+	if err != nil {
+		logger.Error("load vault key", "error", err)
+		os.Exit(1)
+	}
+
+	vaultStore, err := vault.NewSQLiteStore(database, masterKey)
 	if err != nil {
 		logger.Error("init vault", "error", err)
 		os.Exit(1)
 	}
 
-	// Agent API keys.
-	// MVP: from environment. Production: from database.
-	agentKeys := make(map[string]string)
-	if key := os.Getenv("AGENT_API_KEY"); key != "" {
-		agentKeys[key] = "default-agent"
-	} else {
-		logger.Warn("no AGENT_API_KEY set — all requests will be rejected")
+	keyStore := auth.NewKeyStore(database)
+	if err := bootstrapAgentKey(context.Background(), keyStore, logger); err != nil {
+		logger.Error("bootstrap agent key", "error", err)
+		os.Exit(1)
 	}
 
+	// Signer derives its own purpose-specific encryption key from
+	// masterKey — it never uses masterKey directly (internal/signer's own
+	// guarantee), so reusing the vault's master secret here does not reuse
+	// the vault's actual encryption key.
+	signerStore, err := signer.NewStore(database, masterKey)
+	if err != nil {
+		logger.Error("init signer", "error", err)
+		os.Exit(1)
+	}
+	if _, _, err := signerStore.LoadOrCreateActive(1); err != nil {
+		logger.Error("load or create signing key", "error", err)
+		os.Exit(1)
+	}
+
+	ledger := receipt.NewLedger(database, signerStore)
+	limiter := ratelimit.New(nil) // no per-service limits configured yet; Allow() is a pass-through
+
 	srv := gateway.New(gateway.Config{
-		Registry:  reg,
-		Vault:     store,
-		Logger:    logger,
-		AgentKeys: agentKeys,
+		Registry:   reg,
+		Vault:      vaultStore,
+		Logger:     logger,
+		Authorizer: keyStore,
+		Receipts:   ledger,
+		Limiter:    limiter,
 	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/", srv)
+	mux.HandleFunc("GET /v1/receipts/pubkey", signer.PubkeyHandler(signerStore))
 
 	httpSrv := &http.Server{
 		Addr:         *addr,
-		Handler:      srv,
+		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -114,4 +145,42 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown", "error", err)
 	}
+}
+
+// loadMasterKey reads the 32-byte master secret used to derive both the
+// vault's token-encryption key and the signer's storage-encryption key.
+// AGENTGATE_VAULT_KEY is the name docker-compose.yaml and .env.example
+// already document; the previous VAULT_ENCRYPTION_KEY read in this command
+// never matched either file.
+func loadMasterKey() ([]byte, error) {
+	envKey := os.Getenv("AGENTGATE_VAULT_KEY")
+	if len(envKey) != 32 {
+		return nil, fmt.Errorf("AGENTGATE_VAULT_KEY must be set to exactly 32 bytes (got %d) — this key encrypts vault tokens and the receipt signing key at rest", len(envKey))
+	}
+	return []byte(envKey), nil
+}
+
+// bootstrapAgentKey creates one agent API key on an empty database and
+// logs its plaintext value once. There is no import path for an
+// externally supplied plaintext key under the bcrypt-hashed key store, so
+// the previous AGENT_API_KEY env var — a plaintext MVP map lookup — has no
+// equivalent here; an operator now retrieves the bootstrap key from this
+// one-time log line, or an admin API caller creates additional keys via
+// internal/auth.KeyStore.Create.
+func bootstrapAgentKey(ctx context.Context, keyStore *auth.KeyStore, logger *slog.Logger) error {
+	count, err := keyStore.Count(ctx)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, plaintext, err := keyStore.Create(ctx, "bootstrap-agent", []string{"*"}, []string{"*"})
+	if err != nil {
+		return err
+	}
+	logger.Warn("bootstrapped a new agent API key — this is the only time it is shown; store it now",
+		"agent_key", plaintext,
+	)
+	return nil
 }

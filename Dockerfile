@@ -13,4 +13,4 @@ COPY configs/ /etc/agentgate/configs/
 RUN mkdir -p /data
 EXPOSE 8080
 ENTRYPOINT ["agentgate"]
-CMD ["--config", "/etc/agentgate/configs/services.yaml", "--addr", ":8080"]
+CMD ["--config", "/etc/agentgate/configs/services.yaml", "--db", "/data/agentgate.db", "--addr", ":8080"]
