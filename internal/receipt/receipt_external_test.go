@@ -51,9 +51,7 @@ func referenceLP(destination []byte, value string) []byte {
 
 func TestReferenceEncoderAgreement(t *testing.T) {
 	for _, value := range []receipt.Receipt{referenceReceipt(), maximumReceipt()} {
-		if err := receipt.Validate(value); err != nil {
-			t.Fatal(err)
-		}
+		validateReferenceAssumptions(t, value)
 		production, err := receipt.CanonicalHashInput(value)
 		if err != nil {
 			t.Fatal(err)
@@ -61,6 +59,28 @@ func TestReferenceEncoderAgreement(t *testing.T) {
 		if reference := referenceEncode(value); !bytes.Equal(production, reference) {
 			t.Fatalf("encoder mismatch\nproduction: %x\nreference:  %x", production, reference)
 		}
+	}
+}
+
+func validateReferenceAssumptions(t *testing.T, value receipt.Receipt) {
+	t.Helper()
+	if value.Seq == 0 || value.TimestampUnixNS == 0 {
+		t.Fatal("reference receipt uses zero sequence or timestamp")
+	}
+	if value.HumanPrincipal == "" || value.AgentKeyID == "" || value.Service == "" || value.Action == "" || value.SignerKID == "" {
+		t.Fatal("reference receipt uses an empty required string")
+	}
+	if value.PolicyDecision != "allow" && value.PolicyDecision != "deny" && value.PolicyDecision != "rate_limited" {
+		t.Fatalf("reference receipt uses invalid policy decision %q", value.PolicyDecision)
+	}
+	if value.StatusCode < 100 || value.StatusCode > 599 {
+		t.Fatalf("reference receipt uses invalid status %d", value.StatusCode)
+	}
+	if value.LatencyMS < 0 {
+		t.Fatalf("reference receipt uses negative latency %d", value.LatencyMS)
+	}
+	if len(value.DelegationChain) > 32 {
+		t.Fatalf("reference receipt uses %d delegation elements", len(value.DelegationChain))
 	}
 }
 
