@@ -40,17 +40,17 @@ Each task uses one pull request with signed-off commits.
 
 ### Request-Path Ledger
 
-- [ ] **LEDG-01**: Migration `002_receipts.sql` adds receipt storage without changing or deleting `audit_log` data.
-- [ ] **LEDG-02**: The production command uses persistent SQLite auth, vault, migrations, and receipt dependencies.
-- [ ] **LEDG-03**: Verified key scopes bind each receipted agent and human principal before vault access.
-- [ ] **LEDG-04**: Every authenticated, schema-valid action attempt reaches one centralized receipt outcome path.
-- [ ] **LEDG-05**: Allowed, denied, rate-limited, token-failed, upstream-failed, and upstream-returned outcomes receive receipts.
-- [ ] **LEDG-06**: Sequence allocation, predecessor lookup, signing, insertion, and commit occur as one serialized transaction.
-- [ ] **LEDG-07**: A failed receipt transaction consumes no sequence and returns no successful action response.
-- [ ] **LEDG-08**: Restart resumes from the committed head without gaps, duplicates, or an in-memory source of truth.
-- [ ] **LEDG-09**: One hundred concurrent actions produce a chain containing exactly sequences 1 through 100.
-- [ ] **LEDG-10**: R4 records added p99 receipt latency and revisits design only when overhead exceeds 50 ms.
-- [ ] **LEDG-11**: Documentation limits crash guarantees across SQLite and external SaaS side effects.
+- [x] **LEDG-01**: Migration `002_receipts.sql` adds receipt storage without changing or deleting `audit_log` data.
+- [x] **LEDG-02**: The production command uses persistent SQLite auth, vault, migrations, and receipt dependencies.
+- [x] **LEDG-03**: Verified key scopes bind each receipted agent and human principal before vault access.
+- [x] **LEDG-04**: Every authenticated, schema-valid action attempt reaches one centralized receipt outcome path.
+- [x] **LEDG-05**: Allowed, denied, rate-limited, token-failed, upstream-failed, and upstream-returned outcomes receive receipts.
+- [x] **LEDG-06**: Sequence allocation, predecessor lookup, signing, insertion, and commit occur as one serialized transaction.
+- [x] **LEDG-07**: A failed receipt transaction consumes no sequence and returns no successful action response.
+- [x] **LEDG-08**: Restart resumes from the committed head without gaps, duplicates, or an in-memory source of truth.
+- [x] **LEDG-09**: One hundred concurrent actions produce a chain containing exactly sequences 1 through 100.
+- [x] **LEDG-10**: R4 records added p99 receipt latency and revisits design only when overhead exceeds 50 ms.
+- [x] **LEDG-11**: Documentation limits crash guarantees across SQLite and external SaaS side effects.
 
 ### Offline Verification
 
@@ -162,17 +162,17 @@ Each task uses one pull request with signed-off commits.
 | KEY-05 | Phase 3 | R3 | Complete |
 | KEY-06 | Phase 3 | R3 | Complete |
 | KEY-07 | Phase 3 | R3 | Complete |
-| LEDG-01 | Phase 4 | R4 | Pending |
-| LEDG-02 | Phase 4 | R4 | Pending |
-| LEDG-03 | Phase 4 | R4 | Pending |
-| LEDG-04 | Phase 4 | R4 | Pending |
-| LEDG-05 | Phase 4 | R4 | Pending |
-| LEDG-06 | Phase 4 | R4 | Pending |
-| LEDG-07 | Phase 4 | R4 | Pending |
-| LEDG-08 | Phase 4 | R4 | Pending |
-| LEDG-09 | Phase 4 | R4 | Pending |
-| LEDG-10 | Phase 4 | R4 | Pending |
-| LEDG-11 | Phase 4 | R4 | Pending |
+| LEDG-01 | Phase 4 | R4 | Complete |
+| LEDG-02 | Phase 4 | R4 | Complete |
+| LEDG-03 | Phase 4 | R4 | Complete |
+| LEDG-04 | Phase 4 | R4 | Complete |
+| LEDG-05 | Phase 4 | R4 | Complete |
+| LEDG-06 | Phase 4 | R4 | Complete |
+| LEDG-07 | Phase 4 | R4 | Complete |
+| LEDG-08 | Phase 4 | R4 | Complete |
+| LEDG-09 | Phase 4 | R4 | Complete |
+| LEDG-10 | Phase 4 | R4 | Complete |
+| LEDG-11 | Phase 4 | R4 | Complete |
 | VER-01 | Phase 5 | R5 | Pending |
 | VER-02 | Phase 5 | R5 | Pending |
 | VER-03 | Phase 5 | R5 | Pending |

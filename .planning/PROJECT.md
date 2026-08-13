@@ -21,10 +21,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] Phase 1 published an Apache License 2.0 source-release basis with tracked owner affirmation.
 - [x] Phase 2 froze the deterministic, privacy-limited receipt protocol and golden fixtures.
 - [x] Phase 3 delivered a persistent Ed25519 signer package with encrypted key storage, deterministic key IDs, and sequence-bound rotation.
+- [x] Phase 4 wired every authenticated, schema-valid action attempt into one synchronous, chained, signed receipt commit before the HTTP response, replacing the in-memory vault and plaintext API-key map in the production command.
 
 ### Active
 
-- [ ] Chain each receipt to its predecessor without sequence gaps.
 - [ ] Verify SQLite and JSONL receipt logs offline with deterministic exit codes.
 - [ ] Detect modified, deleted, inserted, and forged receipt records.
 - [ ] Export bounded receipt ranges as verifier-compatible JSONL.
@@ -52,7 +52,7 @@ The gateway already contains about 4,000 lines of Go and a passing test suite. E
 
 The current audit logger performs plain SQLite inserts through a buffered channel. Its overflow branch drops entries, which cannot support a gap-free receipt chain.
 
-The production command does not yet compose all existing persistence and policy packages. It uses an in-memory vault and a plaintext API-key map, so request-path receipt work must wire verified identities and persistent state before making authorization claims.
+The production command now composes every existing persistence and policy package: SQLite-backed vault and auth, the Ed25519 signer, and the request-path receipt ledger. Phase 4 replaced the in-memory vault and plaintext API-key map with these persistent, verified dependencies.
 
 The canonical hash-chain reference is `../agentic-operator-core/pkg/audit/chain.go`. Its length-prefixed encoding is reusable, but its HMAC signature is not.
 
@@ -84,8 +84,8 @@ Phase 1 established the Apache License 2.0 source-release basis. It does not cle
 | Keep the existing hash-chain construction | The core implementation already defines a documented canonical encoding | Implemented (Phase 2) |
 | Replace HMAC-SHA256 with Ed25519 | Auditors must verify without gaining forging capability | Implemented (Phase 3) |
 | Hash request parameters | Receipts must be shareable without leaking request bodies | Implemented (Phase 2) |
-| Write receipts synchronously | Buffered writes can drop entries and invalidate the chain | Pending |
-| Preserve the legacy audit table | Existing consumers must not break during migration | Pending |
+| Write receipts synchronously | Buffered writes can drop entries and invalidate the chain | Implemented (Phase 4) |
+| Preserve the legacy audit table | Existing consumers must not break during migration | Implemented (Phase 4) |
 | Resolve key rotation during signing work | Verification must account for every historical signer key ID | Implemented (Phase 3) |
 | Feature GitHub, Slack, and Google Workspace | These services reduce demo friction while Stripe remains available | Pending |
 | Launch only after offline verification and quickstart land | A receipt without verifier adoption is not the product claim | Pending |
