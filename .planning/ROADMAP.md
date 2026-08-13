@@ -189,7 +189,7 @@ Phases 7 through 11 follow launch.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Apache 2.0 Release Basis | 1/1 | Complete    | 2026-08-13 |
-| 2. Receipt Protocol | 0/TBD | Not started | - |
+| 2. Receipt Protocol | 1/2 | In Progress|  |
 | 3. Persistent Signing and Trust | 0/TBD | Not started | - |
 | 4. Synchronous Request-Path Ledger | 0/TBD | Not started | - |
 | 5. Independent Offline Verification | 0/TBD | Not started | - |
