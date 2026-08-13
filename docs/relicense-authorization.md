@@ -28,6 +28,6 @@ Incomplete or uncertain authority blocks merge.
 
 ## Owner Affirmation
 
-Status: Pending personal review and affirmation.
+Status: Affirmed
 Reviewed by: Shreyansh Sancheti
-Review date: `<YYYY-MM-DD>`
+Review date: 2026-08-13
