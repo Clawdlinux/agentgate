@@ -18,10 +18,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] GitHub, Slack, and Stripe service configurations exist.
 - [x] OAuth handlers, rate limiting, a Go SDK, and integration tests exist as reusable packages.
 - [x] Audit events can be stored in SQLite, but they are not tamper evident.
+- [x] Phase 1 published an Apache License 2.0 source-release basis with tracked owner affirmation.
 
 ### Active
 
-- [ ] Publish the repository under Apache License 2.0 before other milestone work.
 - [ ] Emit deterministic receipts that hash request parameters instead of storing raw values.
 - [ ] Chain each receipt to its predecessor without sequence gaps.
 - [ ] Sign receipts with Ed25519 and publish verifier-safe public keys by key ID.
@@ -59,6 +59,8 @@ The canonical hash-chain reference is `../agentic-operator-core/pkg/audit/chain.
 The offline verification reference is `../agentic-operator-core/cmd/audit-verify/main.go`. AgentGate must replace shared-secret verification with Ed25519 public-key verification.
 
 `PRD-receipts-oss.md` defines the milestone order, acceptance cases, launch boundary, and product claims. Current source and older architecture docs disagree about some runtime wiring. Phase research must identify the owning request path before implementation.
+
+Phase 1 established the Apache License 2.0 source-release basis. It does not clear binary distributions or compiled dependency notices.
 
 ## Constraints
 
@@ -106,4 +108,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update context with adoption evidence and operating results.
 
 ---
-*Last updated: 2026-08-11 after initialization*
+*Last updated: 2026-08-13 after Phase 1 completion*
