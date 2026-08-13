@@ -38,7 +38,7 @@ created: 2026-08-13
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 02-01-01 | 01 | 1 | RCPT-02 | Supply-chain gate | Dependency scan and pin follow the fixed SkillSpector disposition policy. | static scan and module pin | `test "$(go list -m -f '{{.Version}}' github.com/go-json-experiment/json)" = "v0.0.0-20251027170946-4849db3c2f7e"` | Existing tooling | pending |
+| 02-01-01 | 01 | 1 | RCPT-02 | Supply-chain gate | Dependency scan and pin follow the fixed SkillSpector disposition policy. | static scan and module pin | `test "$(go list -m -f '{{.Version}}' github.com/gowebpki/jcs)" = "v1.0.1"` | Existing tooling | pending |
 | 02-01-02 | 01 | 1 | RCPT-01 | T-02 | Receipt validation and snapshot semantics enforce exact fields, limits, and vocabularies. | table and reflection | `go test ./internal/receipt -run 'Test(ReceiptFieldContract|Validate|Snapshot)' -count=1` | No, Wave 0 | pending |
 | 02-01-03 | 01 | 1 | RCPT-02, RCPT-03 | T-01, T-03, T-05 | Strict parameter digest and privacy checks reject ambiguity without leaking sensitive input. | unit, property, and sentinel leakage | `go test ./internal/receipt -run 'Test(DigestParams|Privacy)' -count=1` | No, Wave 0 | pending |
 | 02-02-01 | 02 | 2 | RCPT-01 | T-02 | Binary preimage and entry hash fix domain, order, widths, lengths, and exclusions. | binary contract | `go test ./internal/receipt -run 'Test(CanonicalHashInput|ComputeEntryHash)' -count=1` | No, Wave 0 | pending |
@@ -49,16 +49,16 @@ created: 2026-08-13
 
 ## Dependency Supply-Chain Gate
 
-Before adding `github.com/go-json-experiment/json`:
+Before adding `github.com/gowebpki/jcs`:
 
-1. Pin commit `4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b`.
-2. Scan the pinned source with `skillspector scan <source> --no-llm --format json`.
-3. Proceed only on `SAFE`.
-4. Stop for explicit approval on `CAUTION`.
-5. Block on `DO_NOT_INSTALL`, scan errors, incomplete analysis, or uninspected files.
-6. Verify BSD-3-Clause licensing and expected module checksum.
+1. Verify tag `v1.0.1` resolves to commit `1a4242a66e1a8e03d7458324d0bc95c327527cbb`.
+2. Verify committed `02-DEPENDENCY-SCAN.md` records SkillSpector 2.8.2 `SAFE`, score 3, and 0 findings.
+3. Verify the pinned source license is Apache-2.0 and its own tests pass.
+4. Verify module Sum `h1:Qjzg8EOkrOTuWP7DqQ1FbYtcpEbeTzUoTN9bptp8FOU=`.
+5. Verify GoModSum `h1:CID1cNZ+sHp1CCpAR8mPf6QRtagFBgPJE0FCUQ6+BrI=`.
+6. Run `go get github.com/gowebpki/jcs@v1.0.1` only after those checks pass.
 
-The scan runs before `go get`. Never execute package installer code first.
+The approved scan runs before `go get`. Never execute package installer code first.
 
 ---
 
@@ -80,7 +80,6 @@ The existing Go test framework needs no installation.
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Pinned parser dependency acceptance | RCPT-02 | SkillSpector CAUTION requires human risk acceptance. | Review scan findings, immutable pin, BSD-3-Clause license, and module checksum. Approve only if findings are acceptable. |
 | Golden fixture change review | RCPT-05 | Protocol-byte changes require intentional version review. | Confirm tests cannot rewrite fixtures. Compare binary diff and documented SHA-256 before accepting replacement. |
 
 ---
@@ -107,4 +106,4 @@ git diff --check
 - [x] Deterministic feedback latency is under 60 seconds.
 - [x] `nyquist_compliant: true` is set in frontmatter.
 
-**Approval:** pending dependency scan and implementation
+**Approval:** dependency approved; implementation pending

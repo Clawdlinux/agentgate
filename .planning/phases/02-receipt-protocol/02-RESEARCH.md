@@ -62,7 +62,7 @@
 | ID | Description | Research Support |
 |----|-------------|------------------|
 | RCPT-01 | Fixed receipt fields, types, order, limits, and domain separation. | Exact grammar, maximum size, validation order, and reflection tests. [VERIFIED: 02-CONTEXT.md] |
-| RCPT-02 | Equivalent objects produce one SHA-256 digest. | One pinned package handles strict parsing and canonicalization. [CITED: https://github.com/go-json-experiment/json/tree/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext] |
+| RCPT-02 | Equivalent objects produce one SHA-256 digest. | AgentGate strictly validates raw JSON, then `jcs.Transform` performs RFC 8785 canonicalization. [VERIFIED: candidate tests and selected SAFE pin]
 | RCPT-03 | Receipts omit raw parameters and sensitive provider data. | Digest-only API, closed errors, and sentinel leakage tests. [VERIFIED: 02-CONTEXT.md] |
 | RCPT-04 | Independent encoders produce identical bytes. | Production and `receipt_test` encoders compare every fixture. [VERIFIED: 02-CONTEXT.md] |
 | RCPT-05 | Immutable fixtures cover required boundaries. | Versioned manifest, binary files, and fixed hashes. [VERIFIED: 02-CONTEXT.md] |
@@ -70,15 +70,17 @@
 
 ## Summary
 
-Use one pinned `jsontext` revision for strict parsing and RFC 8785 output. This reduces parser differential risk. [CITED: https://github.com/go-json-experiment/json/tree/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext]
+Use `github.com/gowebpki/jcs` v1.0.1 at commit `1a4242a66e1a8e03d7458324d0bc95c327527cbb`. Its `Transform` API performs RFC 8785 canonicalization. [VERIFIED: selected SAFE pin]
 
-The package rejects duplicate decoded names, invalid UTF-8, and malformed surrogate escapes by default. [CITED: https://github.com/go-json-experiment/json/blob/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext/doc.go]
+AgentGate must strictly validate before `Transform`. Use `encoding/json.Decoder` with `UseNumber`, a container stack, and per-object decoded-name sets. Also validate raw UTF-8 and escaped surrogate pairs before decoding. [VERIFIED: candidate limitations]
 
-A token pre-pass must add 3 checks. Enforce depth 32, reject Unicode noncharacters, and reject binary64 overflow. [CITED: https://www.rfc-editor.org/rfc/rfc7493.html]
+The pre-pass rejects duplicate decoded names, invalid raw UTF-8, invalid escaped surrogates, Unicode noncharacters, depth above 32, non-object roots, trailing JSON, and binary64 overflow. It does not canonicalize strings or numbers. [VERIFIED: D-12 through D-15]
+
+The candidate parser does not validate raw UTF-8. Surrogate behavior needs explicit pre-validation and AgentGate tests. Public dependency errors remain hidden. [VERIFIED: candidate tests]
 
 Binary receipt encoding should use standard-library append APIs. Validate a private snapshot before appending any field. [CITED: https://pkg.go.dev/encoding/binary#AppendByteOrder]
 
-**Primary recommendation:** Pin `github.com/go-json-experiment/json` and wrap `jsontext` with AgentGate's stricter limits. [ASSUMED]
+**Primary recommendation:** Pin `github.com/gowebpki/jcs` v1.0.1 and call `jcs.Transform` only after AgentGate strict validation. [VERIFIED: SkillSpector SAFE]
 
 ## Architectural Responsibility Map
 
@@ -115,8 +117,9 @@ Additional repository constraints affect planning:
 
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| Go | 1.25.0 | Package, hashing, encoding, tests, and fuzzing. | The repository pins this version. [VERIFIED: go.mod] |
-| `github.com/go-json-experiment/json/jsontext` | `v0.0.0-20251027170946-4849db3c2f7e` | Strict tokens and RFC 8785 output. | This is the newest revision declaring Go 1.25. [VERIFIED: Go module proxy] [ASSUMED] |
+| Go | 1.25.0 | Package, strict validation, hashing, encoding, tests, and fuzzing. | The repository pins this version. [VERIFIED: go.mod] |
+| `github.com/gowebpki/jcs` | `v1.0.1` | RFC 8785 canonicalization through `Transform`. | Selected SAFE package. Apache-2.0. Candidate tests pass. [VERIFIED: 02-DEPENDENCY-SCAN.md] |
+| `encoding/json` | Go standard library | Token validation with `Decoder.UseNumber`. | Preserves number lexemes and exposes decoded names before map collapse. [CITED: https://pkg.go.dev/encoding/json] |
 | `crypto/sha256` | Go standard library | Parameter and entry hashes. | SHA-256 is locked. [VERIFIED: D-05, D-16] |
 | `encoding/binary` | Go standard library | Fixed little-endian values and lengths. | It directly implements the locked byte order. [CITED: https://pkg.go.dev/encoding/binary] |
 
@@ -124,54 +127,39 @@ Additional repository constraints affect planning:
 
 | Library | Purpose | When to use |
 |---------|---------|-------------|
-| `strconv` | Detect binary64 range errors. | Check every number token before canonicalization. [CITED: https://pkg.go.dev/strconv#ParseFloat] |
-| `unicode/utf8` | Validate receipt field strings. | Check every string before binary encoding. [CITED: https://pkg.go.dev/unicode/utf8#ValidString] |
+| `strconv` | Detect binary64 range errors. | Check every `json.Number` before canonicalization. [CITED: https://pkg.go.dev/strconv#ParseFloat] |
+| `unicode/utf8` | Validate raw JSON and receipt strings. | Reject invalid source bytes before decoding. [CITED: https://pkg.go.dev/unicode/utf8#Valid] |
 | `slices` | Copy `delegation_chain`. | Create an isolated receipt snapshot. [CITED: https://pkg.go.dev/slices#Clone] |
 | `regexp` | Validate stable error codes. | Compile the fixed D-18 pattern once. [VERIFIED: D-18] |
 
-### Alternatives Considered
-
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
-| Pinned `jsontext` | `github.com/gowebpki/jcs v1.0.1` | Stable API, but malformed Unicode cases pass. [VERIFIED: tagged source] |
-| Pinned `jsontext` | `github.com/deszhou/jcs v1.0.0` | Recent API, but only 5 commits and similar gaps. [VERIFIED: GitHub API] |
-| Pinned module | Go 1.25 `encoding/json/jsontext` | Ordinary builds require `GOEXPERIMENT=jsonv2`. [CITED: https://go.dev/blog/jsonv2-exp] |
-| Strict tokens | `encoding/json` into `map[string]any` | It permits duplicates and replaces invalid Unicode. [CITED: https://go.dev/blog/jsonv2-exp] |
-
-**Installation:**
+### Selected Pin
 
 ```bash
-go get github.com/go-json-experiment/json@v0.0.0-20251027170946-4849db3c2f7e
+go get github.com/gowebpki/jcs@v1.0.1
 ```
 
-Expected checksum: `h1:Lf/gRkoycfOBPa42vU2bbgPurFong6zXeFtPoxholzU=`. [VERIFIED: Go module proxy]
+- Tag: `v1.0.1`.
+- Commit: `1a4242a66e1a8e03d7458324d0bc95c327527cbb`.
+- License: Apache-2.0.
+- SkillSpector 2.8.2 static scan: SAFE, score 3, 0 findings.
+- Module Sum: `h1:Qjzg8EOkrOTuWP7DqQ1FbYtcpEbeTzUoTN9bptp8FOU=`.
+- GoModSum: `h1:CID1cNZ+sHp1CCpAR8mPf6QRtagFBgPJE0FCUQ6+BrI=`.
+- Candidate tests: pass.
 
 ## Package Legitimacy Audit
 
-| Package | Registry | Age | Downloads | Source Repo | slopcheck | Disposition |
-|---------|----------|-----|-----------|-------------|-----------|-------------|
-| `github.com/go-json-experiment/json` | Go proxy | Created 2021 | Not published | `github.com/go-json-experiment/json` | Unavailable | Conditional approval. Add a human checkpoint. [ASSUMED] |
+| Package | Registry | Pin | License | SkillSpector | Tests | Disposition |
+|---------|----------|-----|---------|----------------|-------|-------------|
+| `github.com/gowebpki/jcs` | Go proxy | v1.0.1 / `1a4242a66e1a8e03d7458324d0bc95c327527cbb` | Apache-2.0 | SAFE, score 3, 0 findings | Pass | Approved. [VERIFIED: 02-DEPENDENCY-SCAN.md] |
 
-The Go JSON experiment team owns the repository. It uses BSD-3-Clause. [CITED: https://github.com/go-json-experiment/json]
-
-BSD-3-Clause is Category A for Apache projects. [CITED: https://www.apache.org/legal/resolved.html#category-a]
-
-The pin declares Go 1.25 and passed its `jsontext` tests locally. [VERIFIED: local execution]
-
-`slopcheck` was unavailable. The package remains `[ASSUMED]` under the research safety rule. [VERIFIED: local environment]
-
-**Packages removed due to `[SLOP]`:** None. The scanner did not run. [VERIFIED: local environment]
-
-**Packages flagged as suspicious:** The planner must add a human verification checkpoint. [ASSUMED]
+The earlier `github.com/go-json-experiment/json` pin remains `DO_NOT_INSTALL`. It is historical only and must not be installed. [VERIFIED: 02-DEPENDENCY-SCAN.md]
 
 ## JCS Implementation Findings
 
-| Implementation | API and license | Duplicate names | Number behavior | Invalid Unicode | Maintenance | Decision |
-|----------------|-----------------|-----------------|-----------------|-----------------|-------------|----------|
-| Go `jsontext` pin | `Decoder`, `Value.Canonicalize`; BSD-3-Clause. [VERIFIED: tagged source] | Rejected by decoded name. [VERIFIED: tagged tests] | RFC formatting. Overflow saturates unless prechecked. [VERIFIED: source] | Invalid UTF-8 and surrogates fail. Noncharacters need a wrapper. [VERIFIED: source] | Pin dated 2025-10-27. Later module needs Go 1.26. [VERIFIED: Go proxy] | Use with the pre-pass. [ASSUMED] |
-| `gowebpki/jcs v1.0.1` | `Transform([]byte)`; Apache-2.0. [VERIFIED: source] | Rejected, not collapsed. [VERIFIED: source] | RFC vectors pass above $2^{53}-1$. [VERIFIED: tests] | Raw invalid UTF-8 and malformed pairs can pass. [VERIFIED: source] | Last release 2023-10-15. [VERIFIED: Go proxy] | Reject. |
-| `deszhou/jcs v1.0.0` | `Transform([]byte)`; Apache-2.0. [VERIFIED: source] | Rejected, not collapsed. [VERIFIED: tests] | RFC vectors include large integers. [VERIFIED: tests] | Raw invalid UTF-8 and malformed pairs can pass. [VERIFIED: source] | Repository began 2026-03-28. [VERIFIED: GitHub API] | Reject. |
-| `encoding/json` v1 | Decoder and maps; BSD-3-Clause. [VERIFIED: Go docs] | Accepted and collapsed by maps. [CITED: https://go.dev/blog/jsonv2-exp] | Interfaces default to `float64`. [CITED: https://pkg.go.dev/encoding/json] | Invalid sequences become U+FFFD. [CITED: https://pkg.go.dev/encoding/json] | Stable legacy behavior. [CITED: https://pkg.go.dev/encoding/json] | Reject. |
+| Implementation | API and license | Validation behavior | Decision |
+|----------------|-----------------|---------------------|----------|
+| `gowebpki/jcs v1.0.1` | `Transform([]byte)`; Apache-2.0. | RFC vectors and duplicate-name tests pass. Raw UTF-8 is not validated. Surrogates need explicit AgentGate checks. | Use after strict pre-validation. |
+| `encoding/json` token pre-pass | `Decoder`, `UseNumber`; standard library. | Supports decoded-name tracking, stack depth, root, EOF, strings, and number lexemes. Raw UTF-8 and source surrogate correctness need separate checks. | Validation only. Never canonicalize through it. |
 
 RFC 8785 permits representable values outside the safe-integer range. [CITED: https://www.rfc-editor.org/rfc/rfc8785.html#appendix-B]
 
@@ -185,11 +173,12 @@ Reject `1e309`, but accept `9007199254740992`. [CITED: https://www.rfc-editor.or
 flowchart LR
     Raw[Raw parameter bytes] --> Normalize{Nil, JSON space, or null?}
     Normalize -->|Yes| Empty[Use empty object]
-    Normalize -->|No| Parse[Strict jsontext token pass]
+    Normalize -->|No| Raw[Raw UTF-8 and surrogate validation]
+    Raw --> Parse[stdlib Decoder token pass]
     Empty --> Parse
     Parse --> Checks{Object, depth, number, Unicode valid?}
     Checks -->|No| Reject[Sanitized protocol error]
-    Checks -->|Yes| Canon[jsontext RFC 8785 canonicalize]
+    Checks -->|Yes| Canon[jcs.Transform RFC 8785 canonicalize]
     Canon --> Size{At most 1 MiB?}
     Size -->|No| Reject
     Size -->|Yes| ParamHash[SHA-256 parameter digest]
@@ -221,29 +210,29 @@ internal/receipt/
 
 ### Pattern 1: Strict Pass Before Canonicalization
 
-Walk `jsontext.Decoder` tokens before calling `Value.Canonicalize`. [CITED: https://github.com/go-json-experiment/json/blob/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext/decode.go]
+Validate raw bytes before canonicalization. [VERIFIED: D-12 through D-15]
 
 Apply these checks in order:
 
-1. Normalize only nil, empty, JSON whitespace, and exact JSON `null` to `{}`. [VERIFIED: D-14]
-2. Require the first token to open an object. [VERIFIED: D-14]
-3. Reject `StackDepth() > 32`, counting the root object as level 1. [VERIFIED: D-15]
-4. Reject parser errors, including duplicates and malformed Unicode. [VERIFIED: jsontext source]
-5. Reject Unicode noncharacters in decoded names and values. [CITED: https://www.rfc-editor.org/rfc/rfc7493.html#section-2.1]
-6. Parse every number with `strconv.ParseFloat(token.String(), 64)`. Reject errors. [CITED: https://pkg.go.dev/strconv#ParseFloat]
-7. Require `io.EOF` after the complete object. [CITED: https://github.com/go-json-experiment/json/blob/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext/decode.go]
+1. Normalize only nil, empty, JSON whitespace, and exact JSON `null` to `{}`.
+2. Require `utf8.Valid` on normalized source bytes.
+3. Explicitly validate `\u` escapes inside JSON strings. Reject lone or malformed surrogate combinations. Accept valid high-low pairs.
+4. Use `encoding/json.Decoder` with `UseNumber`.
+5. Require the first token to open an object. Count the root as depth 1. Reject depth above 32.
+6. Maintain a container stack. Each object frame tracks decoded names. Reject literal and escaped duplicate names.
+7. Reject Unicode noncharacters in decoded names and string values.
+8. Parse every `json.Number` with `strconv.ParseFloat(..., 64)`. Reject range errors.
+9. Require `io.EOF` after the complete object.
 
-Map dependency failures to sanitized AgentGate errors. Never include raw JSON, names, or values. [RECOMMENDED]
+The validator does not rewrite or canonicalize strings or numbers. Map failures to sanitized AgentGate errors. Never include raw JSON, names, values, or dependency text.
 
-### Pattern 2: Private Canonicalization Copy
+### Pattern 2: Package-Owned Canonicalization
 
-Clone normalized input into `jsontext.Value`, then canonicalize the clone. [CITED: https://github.com/go-json-experiment/json/blob/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext/value.go]
+Pass unchanged normalized bytes to `jcs.Transform`. The SAFE package owns RFC 8785 number formatting, string escaping, and property sorting per D-12.
 
-`Value.Canonicalize` mutates its receiver. Cloning preserves caller-owned bytes. [VERIFIED: source]
+Reject canonical output above `1 << 20` bytes. Exactly 1 MiB passes. One byte more fails. Return `sha256.Sum256(canonical)`. Do not return or retain canonical JSON.
 
-Check canonical length before hashing. Exactly `1 << 20` bytes passes. One more fails. [VERIFIED: D-15]
-
-Return `sha256.Sum256(canonical)`. Do not return or retain canonical JSON. [VERIFIED: D-16]
+The package parser does not validate raw UTF-8. Its surrogate handling needs the explicit pre-pass and dedicated AgentGate tests.
 
 ### Pattern 3: Snapshot Receipt Semantics
 
@@ -300,9 +289,9 @@ It must append every field independently in locked order. Compare bytes before h
 
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| JSON grammar | Byte scanner or regex | `jsontext.Decoder` | Escapes and nesting have security edges. [CITED: https://go.dev/blog/jsonv2-exp] |
-| RFC numbers | Decimal formatter | `jsontext` canonicalization | ECMAScript rounding has extensive vectors. [CITED: https://www.rfc-editor.org/rfc/rfc8785.html#appendix-B] |
-| Key sorting | UTF-8 string sort | `jsontext` canonicalization | JCS sorts decoded UTF-16 units. [CITED: https://www.rfc-editor.org/rfc/rfc8785.html#section-3.2.3] |
+| JSON grammar | Decode into a map | `encoding/json.Decoder` token stack | Decoded-name tracking must occur before map collapse. [VERIFIED: D-13] |
+| RFC numbers | Decimal formatter | `jcs.Transform` | The standards package owns ECMAScript number formatting. [VERIFIED: D-12] |
+| Key sorting | UTF-8 string sort | `jcs.Transform` | JCS sorts decoded UTF-16 units. [CITED: RFC 8785 section 3.2.3] |
 | SHA-256 | Custom digest | `crypto/sha256` | The algorithm is locked. [VERIFIED: D-05, D-16] |
 | Little-endian integers | Scattered shifts | `encoding/binary` | Central byte-order calls are auditable. [CITED: https://pkg.go.dev/encoding/binary] |
 | Golden comparison | Updating snapshots | Fixed files and hashes | Updates can hide protocol drift. [VERIFIED: D-24] |
@@ -382,9 +371,9 @@ Do not add `-update`, `UPDATE_GOLDEN`, or test-time writes. [VERIFIED: D-24]
 
 ## Common Pitfalls
 
-### Parser Differential
+### Validation Boundary
 
-Validation and canonicalization can interpret the same bytes differently. Use one pinned package for both stages. [RECOMMENDED]
+AgentGate validation and package canonicalization are separate by design. Pass unchanged normalized bytes between them. Tests cover duplicates, Unicode, numbers, root, depth, and trailing data.
 
 ### Unsafe-Integer Over-Rejection
 
@@ -392,7 +381,7 @@ Values above $2^{53}-1$ are not automatically invalid. Reject binary64 range err
 
 ### Number Overflow Coercion
 
-The package can saturate `1e309`. Precheck each number with `strconv.ParseFloat`. [VERIFIED: source]
+Reject `1e309` in the stdlib pre-pass with `strconv.ParseFloat`. Do not delegate range acceptance to canonicalization. [VERIFIED: D-15]
 
 ### Unicode Noncharacters
 
@@ -408,52 +397,33 @@ Self-updating snapshots can approve changed bytes. Keep tests read-only and gene
 
 ### Sensitive Error Echoes
 
-Parser errors may include parameter names or snippets. Return stable local categories without wrapping dependency errors. [VERIFIED: jsontext tests]
+Stdlib and package errors may contain names or snippets. Return stable local categories without wrapping either error.
 
 ## Code Examples
 
 ### Strict Token Validation
 
 ```go
-// Source: jsontext Decoder API and RFC 7493.
 func validateParamObject(raw []byte) error {
-    decoder := jsontext.NewDecoder(bytes.NewReader(raw))
-    first, err := decoder.ReadToken()
-    if err != nil || first.Kind() != '{' {
+    if !utf8.Valid(raw) || !validEscapedSurrogates(raw) {
         return ErrInvalidParams
     }
-    for decoder.StackDepth() > 0 {
-        token, err := decoder.ReadToken()
-        if err != nil || decoder.StackDepth() > maxParamDepth {
-            return ErrInvalidParams
-        }
-        switch token.Kind() {
-        case '"':
-            if containsUnicodeNoncharacter(token.String()) {
-                return ErrInvalidParams
-            }
-        case '0':
-            if _, err := strconv.ParseFloat(token.String(), 64); err != nil {
-                return ErrInvalidParams
-            }
-        }
-    }
-    if _, err := decoder.ReadToken(); !errors.Is(err, io.EOF) {
-        return ErrInvalidParams
-    }
-    return nil
+    decoder := json.NewDecoder(bytes.NewReader(raw))
+    decoder.UseNumber()
+    // Walk tokens with container frames. Object frames own decoded-name sets.
+    // Enforce object root, depth 32, strings, numbers, and final EOF.
+    return validateTokens(decoder)
 }
 ```
 
-The implementation must reject another top-level value after the root object. [RECOMMENDED]
+The implementation must reject literal and escaped duplicate names. It must reject another top-level value after the root object. [VERIFIED: D-13 through D-15]
 
 ### Private JCS Digest
 
 ```go
-// Source: jsontext.Value.Canonicalize and crypto/sha256.
 func digestCanonicalParams(normalized []byte) ([32]byte, error) {
-    canonical := jsontext.Value(bytes.Clone(normalized))
-    if err := canonical.Canonicalize(); err != nil {
+    canonical, err := jcs.Transform(normalized)
+    if err != nil {
         return [32]byte{}, ErrInvalidParams
     }
     if len(canonical) > maxCanonicalParamsBytes {
@@ -462,6 +432,8 @@ func digestCanonicalParams(normalized []byte) ([32]byte, error) {
     return sha256.Sum256(canonical), nil
 }
 ```
+
+`jcs.Transform` owns all RFC 8785 string and number canonicalization. The validator only accepts or rejects unchanged normalized bytes. [VERIFIED: D-12]
 
 ### Fixed Binary Appends
 
@@ -526,7 +498,7 @@ Use 0, 1, and `math.MaxUint64` for sequence and timestamp. [VERIFIED: D-09]
 
 | Threat | STRIDE | Failure mode | Required mitigation | Verification |
 |--------|--------|--------------|---------------------|--------------|
-| Parser differential | Tampering | Stages accept different meanings. | One pinned package performs both stages. [RECOMMENDED] | Duplicate, Unicode, and trailing-value tests. |
+| Validation boundary | Tampering | Validation misses input the canonicalizer accepts. | Validate raw UTF-8, surrogates, decoded duplicates, noncharacters, depth, root, EOF, and number range before `jcs.Transform`. | Dedicated boundary tests. |
 | Hash ambiguity | Tampering | Field tuples share one byte sequence. | Domain NUL, widths, lengths, count, and order. [VERIFIED: D-02, D-03] | Independent encoder and mutation tests. |
 | Secret leakage | Information disclosure | Parameters or provider text enter artifacts. | Digest-only type and sanitized errors. [VERIFIED: D-16, D-18] | Sentinel scans across bytes and errors. |
 | Golden drift | Tampering | Tests rewrite expected bytes. | Read-only tests and no-overwrite generator. [VERIFIED: D-24] | Search tests for writes and compare fixed hashes. |
@@ -538,29 +510,22 @@ Request-body limits belong to Phase 4. Phase 2 accepts caller-owned bytes. [VERI
 
 ## State Of The Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| `encoding/json` v1 defaults | `jsontext` strict RFC 7493 defaults | Go article published 2025-09-09. [CITED: https://go.dev/blog/jsonv2-exp] | Duplicates and invalid Unicode fail. |
-| Separate parser and JCS filter | One `jsontext` package | Available in the pinned revision. [VERIFIED: source] | Reduces differential risk. |
-| Go 1.25 experimental standard import | Go 1.26 standard packages | Current Go docs show standard packages. [CITED: https://pkg.go.dev/encoding/json/jsontext] | AgentGate still needs the Go 1.25 pin. |
-
-The latest external module requires Go 1.26. [VERIFIED: Go module proxy]
+| Old Approach | Current Approach | Impact |
+|--------------|------------------|--------|
+| Map-first `encoding/json` decode | `Decoder.UseNumber` token stack | Preserves duplicate-name evidence and number lexemes. |
+| Hand-written JCS formatting | `jcs.Transform` v1.0.1 | Maintained standards code owns strings, numbers, and sorting. |
+| Trust candidate parser validation | AgentGate raw UTF-8 and surrogate pre-pass | Closes documented candidate gaps before canonicalization. |
 
 ## Assumptions Log
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
-| A1 | The pinned module is acceptable after human supply-chain review. | Standard Stack | Rejection blocks the recommended parser. |
+| A1 | The selected SAFE pin remains byte-identical to the scanned commit. | Standard Stack | Any mismatch blocks installation. |
 | A2 | A checked generator under `testdata` is acceptable. | Fixture Architecture | Fixtures need another manual generation method. |
 
 ## Open Questions (RESOLVED)
 
-The dependency policy is fixed. Scan the pinned source before running `go get` or other package installer code.
-
-- A pinned static SkillSpector `SAFE` result proceeds automatically.
-- `CAUTION` requires explicit human approval before installation.
-- `DO_NOT_INSTALL`, scan errors, incomplete analysis, or uninspected files block installation.
-- If the package remains blocked, execution stops. No fallback package is selected during Phase 2.
+The dependency is selected and approved. `github.com/gowebpki/jcs` v1.0.1 at commit `1a4242a66e1a8e03d7458324d0bc95c327527cbb` is SAFE. The historical `go-json-experiment` result remains blocked.
 
 No dependency or protocol question remains open. Public slices use snapshot semantics. [VERIFIED: Go slice semantics]
 
@@ -573,12 +538,11 @@ No dependency or protocol question remains open. Public slices use snapshot sema
 | `shasum` | Manual fixture inspection | Yes | macOS system | Go `crypto/sha256`. [VERIFIED: local execution] |
 | `xxd` | Manual binary inspection | Yes | Homebrew | `hexdump -C`. [VERIFIED: local execution] |
 | `golangci-lint` | Make lint target | No | None | `go vet ./...`. [VERIFIED: local execution, Makefile] |
-| `slopcheck` | Package gate | No | None | Human checkpoint. [VERIFIED: local execution] |
 | Context7 CLI | Library docs | No | None | Official source and docs. [VERIFIED: local execution] |
 
 **Missing dependencies with no fallback:** None. [VERIFIED: local environment]
 
-**Missing dependencies with fallback:** `golangci-lint`, `slopcheck`, and Context7. [VERIFIED: local environment]
+**Missing dependencies with fallback:** `golangci-lint` and Context7. [VERIFIED: local environment]
 
 ## Validation Architecture
 
@@ -670,30 +634,23 @@ The existing test infrastructure needs no new framework. [VERIFIED: Makefile]
 
 - [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html) for JCS strings, numbers, sorting, and I-JSON.
 - [RFC 7493](https://www.rfc-editor.org/rfc/rfc7493.html) for Unicode, numbers, and duplicate names.
-- [Pinned jsontext source](https://github.com/go-json-experiment/json/tree/4849db3c2f7e2cc8a9816ebf68aafb0a046dec5b/jsontext) for exact behavior.
+- [gowebpki/jcs v1.0.1](https://github.com/gowebpki/jcs/tree/v1.0.1) for `Transform` behavior and candidate tests.
 - [Go JSON v2 article](https://go.dev/blog/jsonv2-exp) for v1 flaws and Go 1.25 status.
 - [Go binary docs](https://pkg.go.dev/encoding/binary) for little-endian append APIs.
 - `02-CONTEXT.md`, `PRD-receipts-oss.md`, and `.planning/REQUIREMENTS.md` for the contract.
 
 ### Secondary (MEDIUM confidence)
 
-- [gowebpki/jcs v1.0.1](https://github.com/gowebpki/jcs/tree/v1.0.1) for candidate comparison.
-- [deszhou/jcs v1.0.0](https://github.com/deszhou/jcs/tree/v1.0.0) for candidate comparison.
-- [ASF license policy](https://www.apache.org/legal/resolved.html#category-a) for BSD compatibility.
-
-### Tertiary (LOW confidence)
-
-- Package legitimacy remains low because `slopcheck` was unavailable. [ASSUMED]
 
 ## Metadata
 
 **Confidence breakdown:**
 
-- Standard stack: HIGH behavior confidence. Package acceptance remains MEDIUM.
+- Standard stack: HIGH. The exact pin is SAFE and candidate tests pass.
 - Architecture: HIGH. Locked decisions determine the shape.
 - Pitfalls: HIGH. RFC text and source show each failure mode.
 - Validation: HIGH. Every requirement has a focused command.
 
 **Research date:** 2026-08-13
 
-**Valid until:** 2026-09-12. Recheck the pin if AgentGate adopts Go 1.26.
+**Valid until:** 2026-09-12. Re-scan every version or commit change.

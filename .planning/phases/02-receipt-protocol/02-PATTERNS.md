@@ -119,55 +119,30 @@ The public API stays centered on pure functions.
 
 **Anti-analog:** `internal/gateway/gateway.go` lines 73-78.
 
-```go
-type ActRequest struct {
-    Service    string                 `json:"service"`
-    Action     string                 `json:"action"`
-    OnBehalfOf string                 `json:"on_behalf_of"`
-    Params     map[string]interface{} `json:"params,omitempty"`
-}
-```
+Do not copy its map-first decode. It collapses duplicate names. `DigestParams` accepts raw `[]byte`.
 
-Do not copy this map-first decoding.
-It collapses duplicate object names before receipt validation.
-`DigestParams` must accept raw `[]byte`.
+Normalize nil, JSON whitespace, and exact `null` to `{}`. Validate `utf8.Valid` before decoding. Explicitly validate escaped surrogate pairs in JSON strings. Reject lone high or low surrogates, reversed pairs, broken adjacency, and malformed `\u` escapes. Accept valid pairs.
 
-Use one `jsontext` decoder for parsing and canonicalization.
-Normalize nil, JSON whitespace, and exact `null` to `{}`.
-Require one top-level object and EOF after it.
+Use `encoding/json.Decoder` with `UseNumber`. Walk tokens with a container stack. Require one object root, depth at most 32, and EOF. Each object frame keeps a decoded-name set. This rejects literal duplicates and escaped equivalents before map collapse.
 
-The token pass must enforce these checks:
+Reject Unicode noncharacters in decoded names and values. Parse every `json.Number` with `strconv.ParseFloat(..., 64)` and reject range errors. The validation layer must not canonicalize or rewrite strings or numbers.
 
-1. Root object only.
-2. Maximum stack depth 32.
-3. Duplicate decoded names rejected.
-4. Invalid UTF-8 and surrogate escapes rejected.
-5. Unicode noncharacters rejected.
-6. Every number must pass `strconv.ParseFloat` for binary64 range.
-7. Trailing JSON rejected.
+Call `jcs.Transform` only after validation. It performs all RFC 8785 string escaping, number formatting, and property sorting. Reject canonical output above `1 << 20` bytes. Return only `sha256.Sum256(canonical)`.
 
-Clone normalized bytes before `jsontext.Value.Canonicalize`.
-That method mutates its receiver.
-Reject canonical output above `1 << 20` bytes.
-Return only `sha256.Sum256(canonical)`.
+The candidate parser does not validate raw UTF-8. Its surrogate behavior requires AgentGate tests and explicit pre-validation. Map all parser and dependency failures to stable local errors. Never expose dependency error text.
 
-Map parser failures to local stable errors.
-Do not wrap dependency errors into public errors.
-Dependency errors may contain parameter names or snippets.
-
-Expected imports follow standard-library-first grouping.
-The external module appears in a separate block.
+Expected imports keep standard library and external dependency groups separate.
 
 ```go
 import (
     "bytes"
     "crypto/sha256"
-    "errors"
+    "encoding/json"
     "io"
     "strconv"
     "unicode/utf8"
 
-    "github.com/go-json-experiment/json/jsontext"
+    "github.com/gowebpki/jcs"
 )
 ```
 
@@ -494,7 +469,7 @@ Add the pinned parser to the direct dependency block.
 
 ```go
 require (
-    github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e
+    github.com/gowebpki/jcs v1.0.1
     github.com/mattn/go-sqlite3 v1.14.44
     gopkg.in/yaml.v3 v3.0.1
 )
@@ -518,7 +493,8 @@ Each dependency has module and `go.mod` checksums.
 Expected module checksum from research:
 
 ```text
-github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e h1:Lf/gRkoycfOBPa42vU2bbgPurFong6zXeFtPoxholzU=
+github.com/gowebpki/jcs v1.0.1 h1:Qjzg8EOkrOTuWP7DqQ1FbYtcpEbeTzUoTN9bptp8FOU=
+github.com/gowebpki/jcs v1.0.1/go.mod h1:CID1cNZ+sHp1CCpAR8mPf6QRtagFBgPJE0FCUQ6+BrI=
 ```
 
 Let the Go tool write the matching `go.mod` checksum.
@@ -568,18 +544,16 @@ A passing hash is insufficient if error text leaks input.
 
 ### SkillSpector Dependency Gate
 
-Run this gate before `go get` or any package installer code.
+Verify the committed SAFE report before `go get`.
 
-1. Fetch or inspect the pinned commit source without executing it.
-2. Run `skillspector scan <source> --no-llm --format json`.
-3. Proceed only on `SAFE`.
-4. Stop for explicit approval on `CAUTION`.
-5. Block `DO_NOT_INSTALL`.
-6. Block scan errors, incomplete analysis, or uninspected files.
-7. Verify BSD-3-Clause licensing.
-8. Verify the expected module checksum.
+1. Require module `github.com/gowebpki/jcs` and tag `v1.0.1`.
+2. Require commit `1a4242a66e1a8e03d7458324d0bc95c327527cbb`.
+3. Require SkillSpector 2.8.2 static `SAFE`, score 3, and 0 findings.
+4. Verify Apache-2.0 and the candidate own tests.
+5. Verify the exact module Sum and GoModSum.
+6. Run `go get github.com/gowebpki/jcs@v1.0.1`.
 
-LLM analysis needs separate approval because it sends source externally.
+The historical `go-json-experiment` result remains `DO_NOT_INSTALL`. Never install it. LLM analysis remains disabled.
 
 ### Validation Commands
 
