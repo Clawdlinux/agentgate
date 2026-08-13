@@ -19,12 +19,12 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] OAuth handlers, rate limiting, a Go SDK, and integration tests exist as reusable packages.
 - [x] Audit events can be stored in SQLite, but they are not tamper evident.
 - [x] Phase 1 published an Apache License 2.0 source-release basis with tracked owner affirmation.
+- [x] Phase 2 froze the deterministic, privacy-limited receipt protocol and golden fixtures.
+- [x] Phase 3 delivered a persistent Ed25519 signer package with encrypted key storage, deterministic key IDs, and sequence-bound rotation.
 
 ### Active
 
-- [ ] Emit deterministic receipts that hash request parameters instead of storing raw values.
 - [ ] Chain each receipt to its predecessor without sequence gaps.
-- [ ] Sign receipts with Ed25519 and publish verifier-safe public keys by key ID.
 - [ ] Verify SQLite and JSONL receipt logs offline with deterministic exit codes.
 - [ ] Detect modified, deleted, inserted, and forged receipt records.
 - [ ] Export bounded receipt ranges as verifier-compatible JSONL.
@@ -81,12 +81,12 @@ Phase 1 established the Apache License 2.0 source-release basis. It does not cle
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep the existing hash-chain construction | The core implementation already defines a documented canonical encoding | Pending |
-| Replace HMAC-SHA256 with Ed25519 | Auditors must verify without gaining forging capability | Pending |
-| Hash request parameters | Receipts must be shareable without leaking request bodies | Pending |
+| Keep the existing hash-chain construction | The core implementation already defines a documented canonical encoding | Implemented (Phase 2) |
+| Replace HMAC-SHA256 with Ed25519 | Auditors must verify without gaining forging capability | Implemented (Phase 3) |
+| Hash request parameters | Receipts must be shareable without leaking request bodies | Implemented (Phase 2) |
 | Write receipts synchronously | Buffered writes can drop entries and invalidate the chain | Pending |
 | Preserve the legacy audit table | Existing consumers must not break during migration | Pending |
-| Resolve key rotation during signing work | Verification must account for every historical signer key ID | Pending |
+| Resolve key rotation during signing work | Verification must account for every historical signer key ID | Implemented (Phase 3) |
 | Feature GitHub, Slack, and Google Workspace | These services reduce demo friction while Stripe remains available | Pending |
 | Launch only after offline verification and quickstart land | A receipt without verifier adoption is not the product claim | Pending |
 
@@ -108,4 +108,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update context with adoption evidence and operating results.
 
 ---
-*Last updated: 2026-08-13 after Phase 1 completion*
+*Last updated: 2026-08-14 after Phase 3 completion*

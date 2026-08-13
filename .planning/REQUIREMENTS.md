@@ -30,13 +30,13 @@ Each task uses one pull request with signed-off commits.
 
 ### Signing And Trust
 
-- [ ] **KEY-01**: First persistent startup generates one Ed25519 keypair from cryptographic randomness.
-- [ ] **KEY-02**: The private signing key persists encrypted under a purpose-derived key from the existing vault master key.
-- [ ] **KEY-03**: Restart preserves the signer identity and never replaces an unreadable persistent key silently.
-- [ ] **KEY-04**: `GET /v1/receipts/pubkey` publishes active and historical public keys without private material.
-- [ ] **KEY-05**: Each public key has a deterministic key ID bound to its Ed25519 public bytes.
-- [ ] **KEY-06**: Key rotation preserves verification of old receipts and binds each key to its valid sequence interval.
-- [ ] **KEY-07**: An independent verifier validates a receipt using only a separately trusted public root and public key history.
+- [x] **KEY-01**: First persistent startup generates one Ed25519 keypair from cryptographic randomness.
+- [x] **KEY-02**: The private signing key persists encrypted under a purpose-derived key from the existing vault master key.
+- [x] **KEY-03**: Restart preserves the signer identity and never replaces an unreadable persistent key silently.
+- [x] **KEY-04**: `GET /v1/receipts/pubkey` publishes active and historical public keys without private material.
+- [x] **KEY-05**: Each public key has a deterministic key ID bound to its Ed25519 public bytes.
+- [x] **KEY-06**: Key rotation preserves verification of old receipts and binds each key to its valid sequence interval.
+- [x] **KEY-07**: An independent verifier validates a receipt using only a separately trusted public root and public key history.
 
 ### Request-Path Ledger
 
@@ -155,13 +155,13 @@ Each task uses one pull request with signed-off commits.
 | RCPT-03 | Phase 2 | R2 | Complete |
 | RCPT-04 | Phase 2 | R2 | Complete |
 | RCPT-05 | Phase 2 | R2 | Complete |
-| KEY-01 | Phase 3 | R3 | Pending |
-| KEY-02 | Phase 3 | R3 | Pending |
-| KEY-03 | Phase 3 | R3 | Pending |
-| KEY-04 | Phase 3 | R3 | Pending |
-| KEY-05 | Phase 3 | R3 | Pending |
-| KEY-06 | Phase 3 | R3 | Pending |
-| KEY-07 | Phase 3 | R3 | Pending |
+| KEY-01 | Phase 3 | R3 | Complete |
+| KEY-02 | Phase 3 | R3 | Complete |
+| KEY-03 | Phase 3 | R3 | Complete |
+| KEY-04 | Phase 3 | R3 | Complete |
+| KEY-05 | Phase 3 | R3 | Complete |
+| KEY-06 | Phase 3 | R3 | Complete |
+| KEY-07 | Phase 3 | R3 | Complete |
 | LEDG-01 | Phase 4 | R4 | Pending |
 | LEDG-02 | Phase 4 | R4 | Pending |
 | LEDG-03 | Phase 4 | R4 | Pending |
