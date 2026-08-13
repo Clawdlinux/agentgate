@@ -15,10 +15,10 @@ Each task uses one pull request with signed-off commits.
 
 ### Apache Release Basis
 
-- [ ] **LIC-01**: The owner records authority to relicense every distributed first-party file before R1 merges.
-- [ ] **LIC-02**: A source checkout contains the unmodified Apache License 2.0 text and an accurate `NOTICE` file.
-- [ ] **LIC-03**: All first-party Go files use Apache-compatible notices and contain no Business Source License text.
-- [ ] **LIC-04**: The README identifies Apache License 2.0 and links to the repository license.
+- [x] **LIC-01**: The owner records authority to relicense every distributed first-party file before R1 merges.
+- [x] **LIC-02**: A source checkout contains the unmodified Apache License 2.0 text and an accurate `NOTICE` file.
+- [x] **LIC-03**: All first-party Go files use Apache-compatible notices and contain no Business Source License text.
+- [x] **LIC-04**: The README identifies Apache License 2.0 and links to the repository license.
 
 ### Receipt Protocol
 
@@ -146,10 +146,10 @@ Each task uses one pull request with signed-off commits.
 
 | Requirement | Phase | PRD task | Status |
 |-------------|-------|----------|--------|
-| LIC-01 | Phase 1 | R1 | Pending |
-| LIC-02 | Phase 1 | R1 | Pending |
-| LIC-03 | Phase 1 | R1 | Pending |
-| LIC-04 | Phase 1 | R1 | Pending |
+| LIC-01 | Phase 1 | R1 | Complete |
+| LIC-02 | Phase 1 | R1 | Complete |
+| LIC-03 | Phase 1 | R1 | Complete |
+| LIC-04 | Phase 1 | R1 | Complete |
 | RCPT-01 | Phase 2 | R2 | Pending |
 | RCPT-02 | Phase 2 | R2 | Pending |
 | RCPT-03 | Phase 2 | R2 | Pending |

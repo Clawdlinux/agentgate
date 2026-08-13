@@ -11,7 +11,7 @@ Phases 7 through 11 follow launch.
 
 ## Phases
 
-- [ ] **Phase 1: Apache 2.0 Release Basis** - Confirm authority and publish an accurate Apache 2.0 release basis.
+- [x] **Phase 1: Apache 2.0 Release Basis** - Confirm authority and publish an accurate Apache 2.0 release basis. (completed 2026-08-13)
 - [ ] **Phase 2: Receipt Protocol** - Freeze deterministic, privacy-limited receipt bytes and fixtures.
 - [ ] **Phase 3: Persistent Signing and Trust** - Establish durable Ed25519 identity, rotation, and public trust history.
 - [ ] **Phase 4: Synchronous Request-Path Ledger** - Commit gap-free receipts for authenticated action outcomes before successful responses.
@@ -188,7 +188,7 @@ Phases 7 through 11 follow launch.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Apache 2.0 Release Basis | 0/TBD | Not started | - |
+| 1. Apache 2.0 Release Basis | 1/1 | Complete   | 2026-08-13 |
 | 2. Receipt Protocol | 0/TBD | Not started | - |
 | 3. Persistent Signing and Trust | 0/TBD | Not started | - |
 | 4. Synchronous Request-Path Ledger | 0/TBD | Not started | - |
