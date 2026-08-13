@@ -22,11 +22,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] Phase 2 froze the deterministic, privacy-limited receipt protocol and golden fixtures.
 - [x] Phase 3 delivered a persistent Ed25519 signer package with encrypted key storage, deterministic key IDs, and sequence-bound rotation.
 - [x] Phase 4 wired every authenticated, schema-valid action attempt into one synchronous, chained, signed receipt commit before the HTTP response, replacing the in-memory vault and plaintext API-key map in the production command.
+- [x] Phase 5 shipped `agentgate-verify`, an offline verifier that reads SQLite or JSONL receipt chains against a locally saved trust file and detects modified, deleted, inserted, and forged records with deterministic exit codes.
 
 ### Active
 
-- [ ] Verify SQLite and JSONL receipt logs offline with deterministic exit codes.
-- [ ] Detect modified, deleted, inserted, and forged receipt records.
 - [ ] Export bounded receipt ranges as verifier-compatible JSONL.
 - [ ] Bind attenuated Biscuit delegation chains to their parent grants.
 - [ ] Add Google Workspace to the featured launch connectors while retaining Stripe support.

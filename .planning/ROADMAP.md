@@ -15,7 +15,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 2: Receipt Protocol** - Freeze deterministic, privacy-limited receipt bytes and fixtures. (completed 2026-08-13)
 - [x] **Phase 3: Persistent Signing and Trust** - Establish durable Ed25519 identity, rotation, and public trust history. (completed 2026-08-14)
 - [x] **Phase 4: Synchronous Request-Path Ledger** - Commit gap-free receipts for authenticated action outcomes before successful responses. (completed 2026-08-14)
-- [ ] **Phase 5: Independent Offline Verification** - Verify supplied receipt artifacts offline with pinned public trust.
+- [x] **Phase 5: Independent Offline Verification** - Verify supplied receipt artifacts offline with pinned public trust. (completed 2026-08-14)
 - [ ] **Phase 6: 5-Minute Quickstart and OSS Launch** - Prove a new operator can produce and verify a receipt, then launch.
 - [ ] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact.
 - [ ] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage.

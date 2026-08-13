@@ -54,17 +54,17 @@ Each task uses one pull request with signed-off commits.
 
 ### Offline Verification
 
-- [ ] **VER-01**: The verifier reads receipt chains from SQLite, JSONL files, and JSONL standard input.
-- [ ] **VER-02**: Verification needs no private key, signer state, gateway process, or network connection.
-- [ ] **VER-03**: The verifier requires a separately trusted public root and validates historical key transitions.
-- [ ] **VER-04**: Exit code 0 means all requested checks passed, 1 means mismatch, and 2 means input failure.
-- [ ] **VER-05**: A dedicated test proves a modified receipt fails verification with exit code 1.
-- [ ] **VER-06**: A dedicated test proves an interior-deleted receipt fails verification with exit code 1.
-- [ ] **VER-07**: A dedicated test proves an inserted receipt fails verification with exit code 1.
-- [ ] **VER-08**: A dedicated test proves a forged Ed25519 signature fails verification with exit code 1.
-- [ ] **VER-09**: Malformed input, unknown key IDs, unsupported versions, and empty sources fail with exit code 2.
-- [ ] **VER-10**: Verification reports the first failing sequence without printing sensitive receipt fields.
-- [ ] **VER-11**: Raw-chain completeness claims require a trusted expected head and distinguish partial ranges.
+- [x] **VER-01**: The verifier reads receipt chains from SQLite, JSONL files, and JSONL standard input.
+- [x] **VER-02**: Verification needs no private key, signer state, gateway process, or network connection.
+- [x] **VER-03**: The verifier requires a separately trusted public root and validates historical key transitions.
+- [x] **VER-04**: Exit code 0 means all requested checks passed, 1 means mismatch, and 2 means input failure.
+- [x] **VER-05**: A dedicated test proves a modified receipt fails verification with exit code 1.
+- [x] **VER-06**: A dedicated test proves an interior-deleted receipt fails verification with exit code 1.
+- [x] **VER-07**: A dedicated test proves an inserted receipt fails verification with exit code 1.
+- [x] **VER-08**: A dedicated test proves a forged Ed25519 signature fails verification with exit code 1.
+- [x] **VER-09**: Malformed input, unknown key IDs, unsupported versions, and empty sources fail with exit code 2.
+- [x] **VER-10**: Verification reports the first failing sequence without printing sensitive receipt fields.
+- [x] **VER-11**: Raw-chain completeness claims require a trusted expected head and distinguish partial ranges.
 
 ### Five-Minute Quickstart
 
@@ -173,17 +173,17 @@ Each task uses one pull request with signed-off commits.
 | LEDG-09 | Phase 4 | R4 | Complete |
 | LEDG-10 | Phase 4 | R4 | Complete |
 | LEDG-11 | Phase 4 | R4 | Complete |
-| VER-01 | Phase 5 | R5 | Pending |
-| VER-02 | Phase 5 | R5 | Pending |
-| VER-03 | Phase 5 | R5 | Pending |
-| VER-04 | Phase 5 | R5 | Pending |
-| VER-05 | Phase 5 | R5 | Pending |
-| VER-06 | Phase 5 | R5 | Pending |
-| VER-07 | Phase 5 | R5 | Pending |
-| VER-08 | Phase 5 | R5 | Pending |
-| VER-09 | Phase 5 | R5 | Pending |
-| VER-10 | Phase 5 | R5 | Pending |
-| VER-11 | Phase 5 | R5 | Pending |
+| VER-01 | Phase 5 | R5 | Complete |
+| VER-02 | Phase 5 | R5 | Complete |
+| VER-03 | Phase 5 | R5 | Complete |
+| VER-04 | Phase 5 | R5 | Complete |
+| VER-05 | Phase 5 | R5 | Complete |
+| VER-06 | Phase 5 | R5 | Complete |
+| VER-07 | Phase 5 | R5 | Complete |
+| VER-08 | Phase 5 | R5 | Complete |
+| VER-09 | Phase 5 | R5 | Complete |
+| VER-10 | Phase 5 | R5 | Complete |
+| VER-11 | Phase 5 | R5 | Complete |
 | QST-01 | Phase 6 | R9 | Pending |
 | QST-02 | Phase 6 | R9 | Pending |
 | QST-03 | Phase 6 | R9 | Pending |
