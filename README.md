@@ -1,6 +1,6 @@
 # AgentGate
 
-A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Stripe) on behalf of users. Agents never see tokens — the gateway handles OAuth, encrypted token storage, and request proxying. Every action gets a signed, gap-free receipt that anyone can verify offline, without AgentGate's secret key.
+A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Google Workspace) on behalf of users. Agents never see tokens — the gateway handles OAuth, encrypted token storage, and request proxying. Every action gets a signed, gap-free receipt that anyone can verify offline, without AgentGate's secret key.
 
 ## Quickstart
 
@@ -89,7 +89,7 @@ Agent → POST /v1/act → [Auth MW] → [Registry] → [Vault: get token] → [
                        ▼
 ┌─────────────────────────────────────────────────────┐
 │               UPSTREAM SaaS APIs                     │
-│       Stripe  │  GitHub  │  Slack                    │
+│      GitHub  │  Slack  │  Google Workspace           │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -147,7 +147,7 @@ All admin endpoints require `X-Admin-Secret` header.
 #### POST /admin/keys
 Create a new agent API key.
 ```json
-{"name": "my-agent", "allowed_services": ["stripe", "github"], "allowed_users": ["user-42"]}
+{"name": "my-agent", "allowed_services": ["github", "slack"], "allowed_users": ["user-42"]}
 ```
 
 #### DELETE /admin/keys/{id}
@@ -182,9 +182,12 @@ resp, err := client.Act(ctx, sdk.ActRequest{
 })
 
 // Convenience helpers
-resp, err := client.Stripe(ctx, "user-42", "list_invoices", map[string]interface{}{"limit": 10})
 resp, err := client.GitHub(ctx, "user-42", "list_repos", nil)
 resp, err := client.Slack(ctx, "user-42", "post_message", map[string]interface{}{"channel": "#general", "text": "Hello"})
+resp, err := client.Act(ctx, sdk.ActRequest{Service: "google_workspace", Action: "list_labels", OnBehalfOf: "user-42"})
+
+// Stripe remains fully functional though unfeatured at launch:
+resp, err := client.Stripe(ctx, "user-42", "list_invoices", map[string]interface{}{"limit": 10})
 
 // Error handling
 if sdk.IsTokenMissing(err) {
@@ -213,15 +216,16 @@ if sdk.IsRateLimited(err) {
 | `AGENTGATE_VAULT_KEY` | 32-byte encryption key for the token vault and the receipt signing key | Yes |
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
-| `STRIPE_CLIENT_ID` / `STRIPE_CLIENT_SECRET` | Stripe OAuth credentials | For Stripe OAuth |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
+| `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google OAuth credentials, requesting only the narrow `gmail.labels` scope | For Google Workspace OAuth |
+| `STRIPE_CLIENT_ID` / `STRIPE_CLIENT_SECRET` | Stripe OAuth credentials (Stripe remains configured and functional, just not a featured launch connector) | For Stripe OAuth |
 
 Agent API keys are bootstrapped automatically on first boot and logged once — there is no env var for a pre-supplied key (they are bcrypt-hashed in SQLite; see `POST /admin/keys` to create more).
 
 ### Service Configs
 
-Service configurations are YAML files in `configs/services/`. See `configs/services/github.yaml` for an example.
+Service configurations are YAML files in `configs/services/`. See `configs/services/google_workspace.yaml` for an example. The gateway itself loads the merged `configs/services.yaml`.
 
 ## Tech Stack
 

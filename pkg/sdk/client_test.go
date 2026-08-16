@@ -138,6 +138,9 @@ func TestClient_Helpers(t *testing.T) {
 	if _, err := client.Slack(ctx, "user-1", "list_channels", nil); err != nil {
 		t.Fatalf("slack: %v", err)
 	}
+	if _, err := client.GoogleWorkspace(ctx, "user-1", "list_labels", nil); err != nil {
+		t.Fatalf("google workspace: %v", err)
+	}
 }
 
 func TestErrorHelpers(t *testing.T) {

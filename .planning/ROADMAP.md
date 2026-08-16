@@ -19,7 +19,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 6: 5-Minute Quickstart and OSS Launch** - Prove a new operator can produce and verify a receipt, then launch. (completed 2026-08-16)
 - [x] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact. (completed 2026-08-16)
 - [x] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage. (completed 2026-08-16)
-- [ ] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors.
+- [x] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors. (completed 2026-08-16)
 - [ ] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence.
 - [ ] **Phase 11: Contributor Entry Path** - Document contribution rules and open exactly 6 scoped starter issues.
 
@@ -140,7 +140,7 @@ Phases 7 through 11 follow launch.
   5. Package documentation cites both named drafts as design context without claiming standards compliance.
 **Plans**: TBD
 
-### Phase 9: Google Workspace Featured Connector
+### Phase 9: Google Workspace Featured Connector (completed 2026-08-16)
 **Goal**: Operators can use one narrow Gmail labels action through the existing registry and OAuth flow.
 **Depends on**: Phase 8
 **PRD task**: R8

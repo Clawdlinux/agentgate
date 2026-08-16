@@ -31,3 +31,13 @@ func (c *Client) Slack(ctx context.Context, userID, action string, params map[st
 		Params:     params,
 	})
 }
+
+// GoogleWorkspace calls a Google Workspace action via the gateway.
+func (c *Client) GoogleWorkspace(ctx context.Context, userID, action string, params map[string]interface{}) (*ActResponse, error) {
+	return c.Act(ctx, ActRequest{
+		Service:    "google_workspace",
+		Action:     action,
+		OnBehalfOf: userID,
+		Params:     params,
+	})
+}
