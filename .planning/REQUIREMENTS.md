@@ -84,12 +84,12 @@ Each task uses one pull request with signed-off commits.
 
 ### Attenuated Delegation
 
-- [ ] **DELG-01**: AgentGate verifies each Biscuit token and request binding before registry, vault, or upstream access.
-- [ ] **DELG-02**: Delegation checks bind the verified agent, human principal, service, action, limits, expiry, and root.
-- [ ] **DELG-03**: Receipts store ordered commitments derived from verified Biscuit blocks, never raw tokens or policy source.
-- [ ] **DELG-04**: Direct grants keep `delegation_chain` empty, while valid attenuated grants preserve their ordered lineage.
-- [ ] **DELG-05**: A chain-splicing test grafts chain A into chain B and proves AgentGate rejects it before dispatch.
-- [ ] **DELG-06**: Package documentation cites both named IETF drafts as design context without claiming wire compatibility.
+- [x] **DELG-01**: AgentGate verifies each Biscuit token and request binding before registry, vault, or upstream access.
+- [x] **DELG-02**: Delegation checks bind the verified agent, human principal, service, action, limits, expiry, and root.
+- [x] **DELG-03**: Receipts store ordered commitments derived from verified Biscuit blocks, never raw tokens or policy source.
+- [x] **DELG-04**: Direct grants keep `delegation_chain` empty, while valid attenuated grants preserve their ordered lineage.
+- [x] **DELG-05**: A chain-splicing test grafts chain A into chain B and proves AgentGate rejects it before dispatch.
+- [x] **DELG-06**: Package documentation cites both named IETF drafts as design context without claiming wire compatibility.
 
 ### Google Workspace Connector
 
@@ -194,12 +194,12 @@ Each task uses one pull request with signed-off commits.
 | EXPT-03 | Phase 7 | R6 | Complete |
 | EXPT-04 | Phase 7 | R6 | Complete |
 | EXPT-05 | Phase 7 | R6 | Complete |
-| DELG-01 | Phase 8 | R7 | Pending |
-| DELG-02 | Phase 8 | R7 | Pending |
-| DELG-03 | Phase 8 | R7 | Pending |
-| DELG-04 | Phase 8 | R7 | Pending |
-| DELG-05 | Phase 8 | R7 | Pending |
-| DELG-06 | Phase 8 | R7 | Pending |
+| DELG-01 | Phase 8 | R7 | Complete |
+| DELG-02 | Phase 8 | R7 | Complete |
+| DELG-03 | Phase 8 | R7 | Complete |
+| DELG-04 | Phase 8 | R7 | Complete |
+| DELG-05 | Phase 8 | R7 | Complete |
+| DELG-06 | Phase 8 | R7 | Complete |
 | CONN-01 | Phase 9 | R8 | Pending |
 | CONN-02 | Phase 9 | R8 | Pending |
 | CONN-03 | Phase 9 | R8 | Pending |
