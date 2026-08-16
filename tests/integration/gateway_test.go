@@ -8,67 +8,45 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/Clawdlinux/agentgate/internal/admin"
-	"github.com/Clawdlinux/agentgate/internal/audit"
 	"github.com/Clawdlinux/agentgate/internal/auth"
+	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
 	"github.com/Clawdlinux/agentgate/internal/oauth"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
+	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
+	"github.com/Clawdlinux/agentgate/internal/signer"
 	"github.com/Clawdlinux/agentgate/internal/vault"
 )
 
+func testMasterKey() []byte {
+	return []byte("01234567890123456789012345678901")
+}
+
+// setupIntegration wires the real composition: a file-backed SQLite
+// database with every migration applied, the real auth.KeyStore, the real
+// vault.SQLiteStore, the real signer.Store, and the real receipt.Ledger —
+// the same dependency graph cmd/agentgw/main.go builds in production. A
+// real file (not ":memory:") is used because Ledger.Append pins a
+// dedicated connection per transaction; an unshared ":memory:" database
+// would appear empty on that second connection.
 func setupIntegration(t *testing.T, upstreamURL string) (*httptest.Server, *sql.DB, string) {
 	t.Helper()
 
-	// In-memory SQLite.
-	db, err := sql.Open("sqlite3", ":memory:")
+	database, err := agentgatedb.Open(filepath.Join(t.TempDir(), "agentgate.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-
-	// Run migrations.
-	_, err = db.Exec(`
-		CREATE TABLE agent_keys (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			key_hash TEXT NOT NULL,
-			allowed_services TEXT NOT NULL DEFAULT '["*"]',
-			allowed_users TEXT NOT NULL DEFAULT '["*"]',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			revoked_at DATETIME
-		);
-		CREATE TABLE tokens (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id TEXT NOT NULL,
-			service TEXT NOT NULL,
-			access_token_enc BLOB NOT NULL,
-			refresh_token_enc BLOB,
-			expires_at DATETIME,
-			scopes TEXT NOT NULL DEFAULT '[]',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(user_id, service)
-		);
-		CREATE TABLE audit_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-			agent_key_id TEXT NOT NULL,
-			service TEXT NOT NULL,
-			action TEXT NOT NULL,
-			user_id TEXT NOT NULL,
-			status_code INTEGER NOT NULL,
-			latency_ms INTEGER NOT NULL,
-			error TEXT
-		);
-	`)
-	if err != nil {
+	t.Cleanup(func() { database.Close() })
+	if err := agentgatedb.RunMigrations(database); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,28 +83,34 @@ services:
         path: /invoices
 `, baseURL, baseURL)))
 
-	// Vault.
-	encKey := make([]byte, 32)
-	for i := range encKey {
-		encKey[i] = byte(i)
+	// Vault, signer, and receipt ledger all derive from one master key, as
+	// cmd/agentgw/main.go does.
+	masterKey := testMasterKey()
+	vaultStore, err := vault.NewSQLiteStore(database, masterKey)
+	if err != nil {
+		t.Fatal(err)
 	}
-	store, _ := vault.NewMemoryStore(encKey)
 
-	// Key store (for admin handler).
-	keyStore := auth.NewKeyStore(db)
-
-	// Generate an API key and store plaintext in gateway's AgentKeys map.
+	keyStore := auth.NewKeyStore(database)
 	_, apiKey, _ := keyStore.Create(t.Context(), "test-agent", []string{"*"}, []string{"*"})
 
-	// Store a token for testing.
-	_ = store.Put("user-42", "github", vault.Token{
+	_ = vaultStore.Put("user-42", "github", vault.Token{
 		AccessToken: "ghp_test_token",
 		ExpiresAt:   time.Now().Add(time.Hour),
 	})
-	_ = store.Put("user-42", "stripe", vault.Token{
+	_ = vaultStore.Put("user-42", "stripe", vault.Token{
 		AccessToken: "sk_test_token",
 		ExpiresAt:   time.Now().Add(time.Hour),
 	})
+
+	signerStore, err := signer.NewStore(database, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := signerStore.LoadOrCreateActive(1); err != nil {
+		t.Fatal(err)
+	}
+	ledger := receipt.NewLedger(database, signerStore)
 
 	// OAuth.
 	oauthHandler := oauth.NewCallbackHandler(map[string]*oauth.Provider{
@@ -138,20 +122,18 @@ services:
 			TokenURL:     "https://github.com/login/oauth/access_token",
 			Scopes:       []string{"repo"},
 		},
-	}, store, encKey, "http://localhost:8080", nil)
+	}, vaultStore, masterKey, "http://localhost:8080", nil)
 
 	// Admin.
-	adminHandler := admin.NewHandler(keyStore, oauthHandler, store, "admin-secret", nil)
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, "admin-secret", nil)
 
-	// Audit.
-	auditLogger := audit.NewLogger(db, nil)
-	t.Cleanup(func() { auditLogger.Close() })
-
-	// Gateway — the AgentKeys map uses plaintext key as the map key.
+	// Gateway — real dependencies throughout, matching production wiring.
 	gw := gateway.New(gateway.Config{
-		Registry:  reg,
-		Vault:     store,
-		AgentKeys: map[string]string{apiKey: "test-agent"},
+		Registry:   reg,
+		Vault:      vaultStore,
+		Authorizer: keyStore,
+		Receipts:   ledger,
+		Limiter:    ratelimit.New(nil),
 	})
 
 	// Build combined mux.
@@ -160,6 +142,7 @@ services:
 	// Gateway routes — delegate to the gateway's ServeHTTP.
 	mux.Handle("/healthz", gw)
 	mux.Handle("/v1/", gw)
+	mux.HandleFunc("GET /v1/receipts/pubkey", signer.PubkeyHandler(signerStore))
 
 	// Admin routes.
 	mux.HandleFunc("POST /admin/keys", func(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +166,7 @@ services:
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	return ts, db, apiKey
+	return ts, database, apiKey
 }
 
 func TestIntegration_Healthz(t *testing.T) {
@@ -222,7 +205,7 @@ func TestIntegration_ActSuccess(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	ts, _, apiKey := setupIntegration(t, upstream.URL)
+	ts, database, apiKey := setupIntegration(t, upstream.URL)
 
 	body := `{"service":"github","action":"list_repos","on_behalf_of":"user-42"}`
 	req, _ := http.NewRequest("POST", ts.URL+"/v1/act", bytes.NewReader([]byte(body)))
@@ -239,6 +222,94 @@ func TestIntegration_ActSuccess(t *testing.T) {
 
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, body = %s", resp.StatusCode, string(respBody))
+	}
+
+	// The action attempt must have committed exactly one receipt
+	// (LEDG-04), signed and chained from an empty ledger (LEDG-06).
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM receipts").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("receipts row count = %d, want 1", count)
+	}
+	var seq int64
+	var policyDecision string
+	if err := database.QueryRow("SELECT seq, policy_decision FROM receipts LIMIT 1").Scan(&seq, &policyDecision); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 1 {
+		t.Fatalf("seq = %d, want 1", seq)
+	}
+	if policyDecision != "allow" {
+		t.Fatalf("policy_decision = %s, want allow", policyDecision)
+	}
+}
+
+// TestIntegration_ConcurrentActsProduceGapFreeChain fires concurrent real
+// HTTP /v1/act calls end to end (gateway HTTP handler through to SQLite)
+// and asserts the resulting receipt chain has no gaps or duplicates. The
+// exhaustive 100-at-once proof lives in internal/receipt's own ledger
+// test; this test is the end-to-end proof that the gateway's HTTP path
+// reaches the same guarantee (LEDG-09).
+func TestIntegration_ConcurrentActsProduceGapFreeChain(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":1,"name":"repo-1"}]`)
+	}))
+	defer upstream.Close()
+
+	ts, database, apiKey := setupIntegration(t, upstream.URL)
+
+	const n = 25
+	var wg sync.WaitGroup
+	statuses := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			body := `{"service":"github","action":"list_repos","on_behalf_of":"user-42"}`
+			req, _ := http.NewRequest("POST", ts.URL+"/v1/act", bytes.NewReader([]byte(body)))
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Errorf("request %d: %v", i, err)
+				return
+			}
+			defer resp.Body.Close()
+			statuses[i] = resp.StatusCode
+			io.Copy(io.Discard, resp.Body)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, status := range statuses {
+		if status != 200 {
+			t.Fatalf("request %d: status = %d, want 200", i, status)
+		}
+	}
+
+	rows, err := database.Query("SELECT seq FROM receipts ORDER BY seq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var seqs []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			t.Fatal(err)
+		}
+		seqs = append(seqs, seq)
+	}
+	if len(seqs) != n {
+		t.Fatalf("committed receipts = %d, want %d", len(seqs), n)
+	}
+	for i, seq := range seqs {
+		if seq != int64(i+1) {
+			t.Fatalf("seqs[%d] = %d, want %d (gap or duplicate)", i, seq, i+1)
+		}
 	}
 }
 

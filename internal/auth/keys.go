@@ -143,6 +143,17 @@ func (s *KeyStore) Validate(ctx context.Context, plaintext string) (*AgentKey, e
 	return nil, ErrKeyNotFound
 }
 
+// Count returns the number of agent keys on record, including revoked
+// ones. Used by the composition root to decide whether to bootstrap a
+// first agent key on an empty database.
+func (s *KeyStore) Count(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM agent_keys").Scan(&n); err != nil {
+		return 0, fmt.Errorf("auth: count: %w", err)
+	}
+	return n, nil
+}
+
 // Revoke marks a key as revoked.
 func (s *KeyStore) Revoke(ctx context.Context, keyID string) error {
 	result, err := s.db.ExecContext(ctx,

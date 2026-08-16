@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "domain": "agentgate.receipt.hash.v1",
+  "receipt": {
+    "seq": "18446744073709551615",
+    "timestamp_unix_ns": "18446744073709551615",
+    "human_principal": "human-é",
+    "agent_key_id": "agent-max",
+    "delegation_chain": [],
+    "service": "github",
+    "action": "list_repos",
+    "params_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "policy_decision": "allow",
+    "status_code": 599,
+    "latency_ms": "9223372036854775807",
+    "error": "",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "entry_hash_noise": "11",
+    "signer_kid": "signer-v1",
+    "signature_noise": "22"
+  },
+  "binary_file": "genesis-unicode-max.bin",
+  "binary_length": 198,
+  "binary_sha256": "d0b513639439dd4ffaa1da0db727e034651eed305bca702d07d7868577b1ea79",
+  "invalid_bounds": {
+    "delegation_elements": "33 fails",
+    "depth": "33 fails",
+    "human_principal": "257 UTF-8 bytes fail",
+    "latency_ms": "-1 fails",
+    "status_code": "99 and 600 fail"
+  }
+}

@@ -1,7 +1,10 @@
-.PHONY: build run test docker lint clean
+.PHONY: build build-verify run test docker lint clean
 
 build:
 	CGO_ENABLED=1 go build -o bin/agentgate ./cmd/agentgw
+
+build-verify:
+	CGO_ENABLED=1 go build -o bin/agentgate-verify ./cmd/agentgate-verify
 
 run:
 	go run ./cmd/agentgw
