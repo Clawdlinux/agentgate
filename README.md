@@ -251,6 +251,15 @@ make run
 make lint
 ```
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+prerequisites, build/test/lint instructions, focused pull request
+guidance, and DCO sign-off. Issues labeled [`good first
+issue`](https://github.com/Clawdlinux/agentgate/labels/good%20first%20issue)
+are scoped to be independently testable without needing secrets or
+maintainer context.
+
 ## License
 
 AgentGate is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
