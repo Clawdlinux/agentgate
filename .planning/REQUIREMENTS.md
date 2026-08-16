@@ -108,11 +108,11 @@ Each task uses one pull request with signed-off commits.
 
 ### Contribution Path
 
-- [ ] **OSS-01**: Root `CONTRIBUTING.md` documents prerequisites, build, test, lint, focused pull requests, and DCO sign-off.
-- [ ] **OSS-02**: Contributor guidance explains that `git commit -s` adds a sign-off and is not cryptographic signing.
-- [ ] **OSS-03**: Exactly six independently testable issues receive the `good first issue` label after guidance lands.
-- [ ] **OSS-04**: Starter work comprises four service configurations and two verifier-output formatting issues.
-- [ ] **OSS-05**: Every starter issue names files, acceptance checks, and a test path requiring no secrets.
+- [x] **OSS-01**: Root `CONTRIBUTING.md` documents prerequisites, build, test, lint, focused pull requests, and DCO sign-off.
+- [x] **OSS-02**: Contributor guidance explains that `git commit -s` adds a sign-off and is not cryptographic signing.
+- [x] **OSS-03**: Exactly six independently testable issues receive the `good first issue` label after guidance lands.
+- [x] **OSS-04**: Starter work comprises four service configurations and two verifier-output formatting issues.
+- [x] **OSS-05**: Every starter issue names files, acceptance checks, and a test path requiring no secrets.
 
 ## v2 Requirements
 
@@ -209,11 +209,11 @@ Each task uses one pull request with signed-off commits.
 | COMP-03 | Phase 10 | R10 | Complete |
 | COMP-04 | Phase 10 | R10 | Complete |
 | COMP-05 | Phase 10 | R10 | Complete |
-| OSS-01 | Phase 11 | R11 | Pending |
-| OSS-02 | Phase 11 | R11 | Pending |
-| OSS-03 | Phase 11 | R11 | Pending |
-| OSS-04 | Phase 11 | R11 | Pending |
-| OSS-05 | Phase 11 | R11 | Pending |
+| OSS-01 | Phase 11 | R11 | Complete |
+| OSS-02 | Phase 11 | R11 | Complete |
+| OSS-03 | Phase 11 | R11 | Complete |
+| OSS-04 | Phase 11 | R11 | Complete |
+| OSS-05 | Phase 11 | R11 | Complete |
 
 **Coverage:**
 - v1 requirements: 68 total

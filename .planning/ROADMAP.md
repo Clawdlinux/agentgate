@@ -21,7 +21,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage. (completed 2026-08-16)
 - [x] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors. (completed 2026-08-16)
 - [x] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence. (completed 2026-08-16)
-- [ ] **Phase 11: Contributor Entry Path** - Document contribution rules and open exactly 6 scoped starter issues.
+- [x] **Phase 11: Contributor Entry Path** - Document contribution rules and open exactly 6 scoped starter issues. (completed 2026-08-16)
 
 ## Phase Details
 
@@ -168,7 +168,7 @@ Phases 7 through 11 follow launch.
   5. The comparison contains no unsupported benchmarks, scores, or absolute market claims.
 **Plans**: TBD
 
-### Phase 11: Contributor Entry Path
+### Phase 11: Contributor Entry Path (completed 2026-08-16)
 **Goal**: New contributors can prepare focused changes and choose from exactly 6 independently testable starter issues.
 **Depends on**: Phase 10
 **PRD task**: R11
