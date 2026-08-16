@@ -28,11 +28,11 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] Phase 8 wired `github.com/biscuit-auth/biscuit-go` into the request path: AgentGate verifies a presented Biscuit's signature chain and binds its grant to the actual request (agent, principal, service, action, expiry) before any registry, vault, or upstream access, records ordered attenuation-path commitments in the receipt, and denies (while still receipting) two distinct constructed scope-widening/splicing attempts.
 - [x] Phase 9 added Google Workspace's narrow Gmail labels action as a pure configuration/test/documentation change (no gateway code modified, since the OAuth provider builder and auth injection were already fully registry-driven), and closed a previously entirely-missing contract test gap: no prior test had ever loaded the actual `configs/services.yaml` file this repository ships.
 - [x] Phase 10 published `docs/comparison.md`, sourced live against Nango, Composio, Astrix Security, and Oasis Security's own current public documentation rather than reconstructed from memory, flagging Astrix Security's Cisco acquisition and end of standalone sales prominently and recognizing (without acting on) a prompt injection attempt encountered on composio.dev during research.
+- [x] Phase 11 published `CONTRIBUTING.md` (prerequisites, build/test/lint, focused PRs, and an explicit DCO sign-off-vs-signature distinction) and opened exactly six `good first issue`-labeled GitHub issues (#9-#14): four service-configuration tasks (Notion, HubSpot, Airtable, Calendly) chosen specifically because their APIs fit the existing registry schema with no Go code changes, and two additive, opt-in `agentgate-verify` output-formatting flags (`--format json`, `--quiet`). This is the milestone's final phase.
 
 ### Active
 
-- [ ] Publish sourced competitor comparisons and contribution guidance.
-- [ ] Seed six scoped `good first issue` tasks after contributor documentation lands.
+None currently open. All v1.0 requirements are Validated.
 
 ### Out of Scope
 
@@ -89,6 +89,7 @@ Phase 1 established the Apache License 2.0 source-release basis. It does not cle
 | Resolve key rotation during signing work | Verification must account for every historical signer key ID | Implemented (Phase 3) |
 | Feature GitHub, Slack, and Google Workspace | These services reduce demo friction while Stripe remains available | Implemented (Phase 9) |
 | "Sits in the request path" as a comparison column | The most direct, sourced way to express which products are the live choke point for an action versus an out-of-band governance layer | Implemented (Phase 10) |
+| Choose starter-issue services that fit the existing registry schema with zero Go changes | Keeps "good first issue" genuinely code-free rather than a disguised schema-change task | Implemented (Phase 11) |
 | Launch only after offline verification and quickstart land | A receipt without verifier adoption is not the product claim | Implemented (Phase 6) |
 | `VerifyChain` requires an explicit Anchor rather than an implicit nil-means-genesis default | Ambiguous verifier defaults have already caused a silent-acceptance bug this milestone (Phase 5's `ValidUntilSeq`) | Implemented (Phase 7) |
 | Exported JSONL embeds its own signed trust keys instead of requiring a larger `--trust-root` | Self-contained artifacts let an auditor verify without a side channel for key distribution | Implemented (Phase 7) |
