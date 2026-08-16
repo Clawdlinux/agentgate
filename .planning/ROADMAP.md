@@ -20,7 +20,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact. (completed 2026-08-16)
 - [x] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage. (completed 2026-08-16)
 - [x] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors. (completed 2026-08-16)
-- [ ] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence.
+- [x] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence. (completed 2026-08-16)
 - [ ] **Phase 11: Contributor Entry Path** - Document contribution rules and open exactly 6 scoped starter issues.
 
 ## Phase Details
@@ -153,7 +153,7 @@ Phases 7 through 11 follow launch.
   4. Stripe configuration and SDK support remain functional but unfeatured.
 **Plans**: TBD
 
-### Phase 10: Sourced Product Comparison
+### Phase 10: Sourced Product Comparison (completed 2026-08-16)
 **Goal**: Readers can compare documented product capabilities without unsupported negatives or market claims.
 **Depends on**: Phase 9
 **PRD task**: R10

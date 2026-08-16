@@ -100,11 +100,11 @@ Each task uses one pull request with signed-off commits.
 
 ### Sourced Comparison
 
-- [ ] **COMP-01**: `docs/comparison.md` contains the five required products and five required capability columns.
-- [ ] **COMP-02**: Every positive competitor claim links to dated first-party public documentation.
-- [ ] **COMP-03**: Missing public evidence is labeled `Not documented`, never inferred as a definitive absence.
-- [ ] **COMP-04**: AgentGate comparison claims link to shipped behavior and reproducible verification evidence.
-- [ ] **COMP-05**: The comparison contains no unsupported benchmarks, scores, or absolute market claims.
+- [x] **COMP-01**: `docs/comparison.md` contains the five required products and five required capability columns.
+- [x] **COMP-02**: Every positive competitor claim links to dated first-party public documentation.
+- [x] **COMP-03**: Missing public evidence is labeled `Not documented`, never inferred as a definitive absence.
+- [x] **COMP-04**: AgentGate comparison claims link to shipped behavior and reproducible verification evidence.
+- [x] **COMP-05**: The comparison contains no unsupported benchmarks, scores, or absolute market claims.
 
 ### Contribution Path
 
@@ -204,11 +204,11 @@ Each task uses one pull request with signed-off commits.
 | CONN-02 | Phase 9 | R8 | Complete |
 | CONN-03 | Phase 9 | R8 | Complete |
 | CONN-04 | Phase 9 | R8 | Complete |
-| COMP-01 | Phase 10 | R10 | Pending |
-| COMP-02 | Phase 10 | R10 | Pending |
-| COMP-03 | Phase 10 | R10 | Pending |
-| COMP-04 | Phase 10 | R10 | Pending |
-| COMP-05 | Phase 10 | R10 | Pending |
+| COMP-01 | Phase 10 | R10 | Complete |
+| COMP-02 | Phase 10 | R10 | Complete |
+| COMP-03 | Phase 10 | R10 | Complete |
+| COMP-04 | Phase 10 | R10 | Complete |
+| COMP-05 | Phase 10 | R10 | Complete |
 | OSS-01 | Phase 11 | R11 | Pending |
 | OSS-02 | Phase 11 | R11 | Pending |
 | OSS-03 | Phase 11 | R11 | Pending |
