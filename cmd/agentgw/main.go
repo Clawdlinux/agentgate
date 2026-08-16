@@ -18,12 +18,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Clawdlinux/agentgate/internal/admin"
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
+	"github.com/Clawdlinux/agentgate/internal/oauth"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
@@ -113,9 +116,27 @@ func main() {
 		Limiter:    limiter,
 	})
 
+	adminSecret := os.Getenv("AGENTGATE_ADMIN_SECRET")
+	if adminSecret == "" {
+		logger.Error("AGENTGATE_ADMIN_SECRET must be set")
+		os.Exit(1)
+	}
+	publicURL := os.Getenv("AGENTGATE_PUBLIC_URL")
+	if publicURL == "" {
+		publicURL = "http://localhost:8080"
+	}
+
+	oauthHandler := oauth.NewCallbackHandler(buildOAuthProviders(reg, logger), vaultStore, masterKey, publicURL, logger)
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, adminSecret, logger)
+
 	mux := http.NewServeMux()
 	mux.Handle("/", srv)
 	mux.HandleFunc("GET /v1/receipts/pubkey", signer.PubkeyHandler(signerStore))
+	mux.Handle("POST /admin/keys", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.CreateKey)))
+	mux.Handle("DELETE /admin/keys/{id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.RevokeKey)))
+	mux.Handle("POST /admin/link", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.LinkAccount)))
+	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
+	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
 
 	httpSrv := &http.Server{
 		Addr:         *addr,
@@ -183,4 +204,35 @@ func bootstrapAgentKey(ctx context.Context, keyStore *auth.KeyStore, logger *slo
 		"agent_key", plaintext,
 	)
 	return nil
+}
+
+// buildOAuthProviders constructs one oauth.Provider per registered service
+// whose auth.type is oauth2 and whose <SERVICE>_CLIENT_ID/_CLIENT_SECRET
+// env vars are both set. A service missing either value is skipped with a
+// warning, not a startup failure — an operator connecting only GitHub
+// should not be forced to configure every registered service.
+func buildOAuthProviders(reg *registry.Registry, logger *slog.Logger) map[string]*oauth.Provider {
+	providers := make(map[string]*oauth.Provider)
+	for _, name := range reg.List() {
+		svc, err := reg.Get(name)
+		if err != nil || svc.Auth.Type != "oauth2" {
+			continue
+		}
+		prefix := strings.ToUpper(name)
+		clientID := os.Getenv(prefix + "_CLIENT_ID")
+		clientSecret := os.Getenv(prefix + "_CLIENT_SECRET")
+		if clientID == "" || clientSecret == "" {
+			logger.Warn("oauth provider not configured; account linking is disabled for this service", "service", name)
+			continue
+		}
+		providers[name] = &oauth.Provider{
+			Name:         name,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			AuthorizeURL: svc.Auth.AuthorizeURL,
+			TokenURL:     svc.Auth.TokenURL,
+			Scopes:       svc.Auth.Scopes,
+		}
+	}
+	return providers
 }

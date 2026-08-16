@@ -31,9 +31,9 @@ var ErrActionNotFound = errors.New("registry: action not found")
 
 // Service describes one SaaS API endpoint.
 type Service struct {
-	Name    string  `yaml:"name"`
-	BaseURL string  `yaml:"base_url"`
-	Auth    AuthCfg `yaml:"auth"`
+	Name    string            `yaml:"name"`
+	BaseURL string            `yaml:"base_url"`
+	Auth    AuthCfg           `yaml:"auth"`
 	Actions map[string]Action `yaml:"actions"`
 }
 
