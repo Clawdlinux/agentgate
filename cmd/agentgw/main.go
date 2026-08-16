@@ -136,6 +136,7 @@ func main() {
 	mux.Handle("DELETE /admin/keys/{id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.RevokeKey)))
 	mux.Handle("POST /admin/link", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.LinkAccount)))
 	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
+	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
 	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
 
 	httpSrv := &http.Server{

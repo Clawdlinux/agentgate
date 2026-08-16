@@ -25,6 +25,7 @@ var ErrUnsupportedFormatVersion = errors.New("receipt: unsupported format_versio
 // "use lowercase hexadecimal for fixed binary values in JSONL" guidance —
 // the canonical hash never depends on this encoding's field order.
 type jsonlReceiptV1 struct {
+	Type            string   `json:"type,omitempty"`
 	FormatVersion   int      `json:"format_version"`
 	Seq             uint64   `json:"seq"`
 	TimestampUnixNS uint64   `json:"timestamp_unix_ns"`
@@ -47,6 +48,7 @@ type jsonlReceiptV1 struct {
 // MarshalJSONLReceipt encodes r as one JSONL line (no trailing newline).
 func MarshalJSONLReceipt(r Receipt) ([]byte, error) {
 	line := jsonlReceiptV1{
+		Type:            "receipt",
 		FormatVersion:   JSONLFormatVersion,
 		Seq:             r.Seq,
 		TimestampUnixNS: r.TimestampUnixNS,

@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -329,5 +331,134 @@ func TestRun_ExpectedHead(t *testing.T) {
 	}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("mismatched expected head: exit code = %d, want 1", code)
+	}
+}
+
+// buildTestExportJSONL builds a real chain via a Ledger, serves it through
+// receipt.ExportHandler over httptest, and writes the resulting ndjson body
+// (manifest + embedded keys + receipts) to a temp file. Returns the file
+// path and the total number of receipts appended (the chain's true head).
+func buildTestExportJSONL(t *testing.T, appendCount int, query string) (path string, headSeq int) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "agentgate.db")
+	database, err := agentgatedb.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if err := agentgatedb.RunMigrations(database); err != nil {
+		t.Fatalf("db.RunMigrations: %v", err)
+	}
+	store, err := signer.NewStore(database, testMasterKey())
+	if err != nil {
+		t.Fatalf("signer.NewStore: %v", err)
+	}
+	if _, _, err := store.LoadOrCreateActive(1); err != nil {
+		t.Fatalf("LoadOrCreateActive: %v", err)
+	}
+	ledger := receipt.NewLedger(database, store)
+	for i := 0; i < appendCount; i++ {
+		draft := receipt.Draft{
+			HumanPrincipal: "user-1",
+			AgentKeyID:     "agent-1",
+			Service:        "github",
+			Action:         "list_repos",
+			PolicyDecision: "allow",
+			StatusCode:     200,
+			LatencyMS:      5,
+		}
+		if _, err := ledger.Append(t.Context(), draft); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/v1/receipts/export?"+query, nil)
+	w := httptest.NewRecorder()
+	receipt.ExportHandler(database, store)(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	path = filepath.Join(t.TempDir(), "export.jsonl")
+	if err := os.WriteFile(path, w.Body.Bytes(), 0o600); err != nil {
+		t.Fatalf("write export file: %v", err)
+	}
+	return path, appendCount
+}
+
+// TestRun_JSONLExport_FullRangeSelfContained covers EXPT-04: a full-range
+// export verifies with no --trust-root, using only its own embedded keys
+// and manifest-derived anchor/expected-head, and reports "range: full".
+func TestRun_JSONLExport_FullRangeSelfContained(t *testing.T) {
+	jsonlPath, _ := buildTestExportJSONL(t, 5, "from=1")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "jsonl", "--path", jsonlPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("PASS")) {
+		t.Fatalf("stdout = %s, want PASS", stdout.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("range: full")) {
+		t.Fatalf("stdout = %s, want 'range: full'", stdout.String())
+	}
+}
+
+// TestRun_JSONLExport_PartialRangeSelfContained covers EXPT-04 for a
+// bounded, non-genesis-anchored export: it must still verify with no
+// --trust-root and must report the range as partial.
+func TestRun_JSONLExport_PartialRangeSelfContained(t *testing.T) {
+	jsonlPath, _ := buildTestExportJSONL(t, 6, "from=3&to=5")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "jsonl", "--path", jsonlPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("PASS")) {
+		t.Fatalf("stdout = %s, want PASS", stdout.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("range: partial")) {
+		t.Fatalf("stdout = %s, want 'range: partial'", stdout.String())
+	}
+}
+
+// TestRun_JSONLExport_TamperedManifestSignatureFailsClosed covers EXPT-03's
+// binding guarantee: a manifest whose signature no longer matches its
+// content must fail verification even though every individual receipt in
+// the export is untouched and would verify on its own.
+func TestRun_JSONLExport_TamperedManifestSignatureFailsClosed(t *testing.T) {
+	jsonlPath, _ := buildTestExportJSONL(t, 4, "from=1")
+
+	data, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n"))
+	if len(lines) == 0 || receipt.DetectJSONLLineType(lines[0]) != "manifest" {
+		t.Fatal("expected the first line of the export to be the manifest")
+	}
+
+	manifest, err := receipt.ParseManifestLine(lines[0])
+	if err != nil {
+		t.Fatalf("ParseManifestLine: %v", err)
+	}
+	manifest.Signature[0] ^= 0xFF // flip a byte, preserving length and structure
+	tampered, err := receipt.MarshalManifestLine(manifest)
+	if err != nil {
+		t.Fatalf("MarshalManifestLine: %v", err)
+	}
+	lines[0] = tampered
+
+	tamperedPath := filepath.Join(t.TempDir(), "tampered.jsonl")
+	if err := os.WriteFile(tamperedPath, bytes.Join(lines, []byte("\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "jsonl", "--path", tamperedPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }

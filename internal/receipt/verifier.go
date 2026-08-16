@@ -119,6 +119,16 @@ type ExpectedHead struct {
 	EntryHash [32]byte
 }
 
+// Anchor is the committed (seq, entry_hash) immediately before the first
+// receipt VerifyChain checks. The zero value, Anchor{}, is genesis (Seq 0,
+// a zero EntryHash) — whole-ledger verification's anchor. A bounded export
+// starting at seq N uses the real (N-1)th receipt's own (seq, entry_hash)
+// as its anchor, which is exactly what an export manifest signs.
+type Anchor struct {
+	Seq       uint64
+	EntryHash [32]byte
+}
+
 // ParseExpectedHead parses the --expected-head flag value "SEQ:HEXHASH".
 func ParseExpectedHead(s string) (ExpectedHead, error) {
 	seqStr, hashStr, ok := strings.Cut(s, ":")
@@ -157,20 +167,24 @@ type VerifyResult struct {
 }
 
 // VerifyChain checks receipts — already ordered by ascending Seq — against
-// trustedKeys. A returned error means the input or configuration itself
-// could not be checked at all (VER-09: empty sources, unknown key IDs,
-// unsupported versions) — the caller should treat that as an I/O/config
-// failure, not a tamper finding. A returned VerifyResult with OK == false
-// means verification ran and found a mismatch (VER-05 through VER-08).
+// trustedKeys, starting from anchor (the committed state immediately
+// before the first receipt). A returned error means the input or
+// configuration itself could not be checked at all (VER-09: empty
+// sources, unknown key IDs, unsupported versions) — the caller should
+// treat that as an I/O/config failure, not a tamper finding. A returned
+// VerifyResult with OK == false means verification ran and found a
+// mismatch (VER-05 through VER-08).
 //
-// Genesis anchoring (the first receipt must be Seq 1 with a zero
-// PrevHash) is always required: this milestone verifies whole local
-// ledgers or JSONL dumps of one. Bounded, manifest-anchored exports that
-// can start mid-chain are a later phase's scope.
+// Pass Anchor{} for genesis (a whole local ledger or a full JSONL dump of
+// one) — this reproduces Phase 5's original always-genesis behavior
+// exactly. A bounded export passes the real (seq, entry_hash) of the
+// receipt immediately preceding the exported range, from its signed
+// manifest, so a partial range verifies without requiring the whole
+// ledger.
 //
 // If expectedHead is non-nil, VerifyChain additionally requires the final
 // receipt to match it exactly before claiming completeness (VER-11).
-func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, expectedHead *ExpectedHead) (VerifyResult, error) {
+func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, anchor Anchor, expectedHead *ExpectedHead) (VerifyResult, error) {
 	if len(trustedKeys) == 0 {
 		return VerifyResult{}, ErrNoTrustedKeys
 	}
@@ -184,11 +198,12 @@ func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, expectedHead *Exp
 	}
 
 	result := VerifyResult{TotalReceipts: len(receipts)}
-	var prevHash [32]byte
+	wantSeq := anchor.Seq + 1
+	prevHash := anchor.EntryHash
 	for i := range receipts {
 		r := receipts[i]
 
-		if r.Seq != uint64(i+1) {
+		if r.Seq != wantSeq+uint64(i) {
 			result.FailedAtSeq = r.Seq
 			result.Reason = ReasonSequenceGap
 			return result, nil
