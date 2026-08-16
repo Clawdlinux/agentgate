@@ -188,14 +188,16 @@ Phases 7 through 11 follow launch.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Apache 2.0 Release Basis | 1/1 | Complete    | 2026-08-13 |
-| 2. Receipt Protocol | 2/2 | Complete   | 2026-08-13 |
+| 1. Apache 2.0 Release Basis | 1/1 | Complete | 2026-08-13 |
+| 2. Receipt Protocol | 2/2 | Complete | 2026-08-13 |
 | 3. Persistent Signing and Trust | 1/1 | Complete | 2026-08-14 |
-| 4. Synchronous Request-Path Ledger | 0/TBD | Not started | - |
-| 5. Independent Offline Verification | 0/TBD | Not started | - |
-| 6. 5-Minute Quickstart and OSS Launch | 0/TBD | Not started | - |
-| 7. Signed Bounded Export | 0/TBD | Not started | - |
-| 8. Parent-Bound Biscuit Delegation | 0/TBD | Not started | - |
-| 9. Google Workspace Featured Connector | 0/TBD | Not started | - |
-| 10. Sourced Product Comparison | 0/TBD | Not started | - |
-| 11. Contributor Entry Path | 0/TBD | Not started | - |
+| 4. Synchronous Request-Path Ledger | 1/1 | Complete | 2026-08-14 |
+| 5. Independent Offline Verification | 1/1 | Complete | 2026-08-14 |
+| 6. 5-Minute Quickstart and OSS Launch | 1/1 | Complete | 2026-08-16 |
+| 7. Signed Bounded Export | 1/1 | Complete | 2026-08-16 |
+| 8. Parent-Bound Biscuit Delegation | 1/1 | Complete | 2026-08-16 |
+| 9. Google Workspace Featured Connector | 1/1 | Complete | 2026-08-16 |
+| 10. Sourced Product Comparison | 1/1 | Complete | 2026-08-16 |
+| 11. Contributor Entry Path | 1/1 | Complete | 2026-08-16 |
+
+All 11 phases of milestone v1.0 are complete.
