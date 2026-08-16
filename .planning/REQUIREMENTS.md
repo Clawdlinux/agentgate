@@ -93,10 +93,10 @@ Each task uses one pull request with signed-off commits.
 
 ### Google Workspace Connector
 
-- [ ] **CONN-01**: Google Workspace provides one Gmail labels action through the existing service registry and OAuth flow.
-- [ ] **CONN-02**: The connector requests the narrow Gmail labels scope and has registry contract tests.
-- [ ] **CONN-03**: Launch documentation features GitHub, Slack, and Google Workspace as exactly three connectors.
-- [ ] **CONN-04**: Stripe configuration and SDK support remain functional but are not featured at launch.
+- [x] **CONN-01**: Google Workspace provides one Gmail labels action through the existing service registry and OAuth flow.
+- [x] **CONN-02**: The connector requests the narrow Gmail labels scope and has registry contract tests.
+- [x] **CONN-03**: Launch documentation features GitHub, Slack, and Google Workspace as exactly three connectors.
+- [x] **CONN-04**: Stripe configuration and SDK support remain functional but are not featured at launch.
 
 ### Sourced Comparison
 
@@ -200,10 +200,10 @@ Each task uses one pull request with signed-off commits.
 | DELG-04 | Phase 8 | R7 | Complete |
 | DELG-05 | Phase 8 | R7 | Complete |
 | DELG-06 | Phase 8 | R7 | Complete |
-| CONN-01 | Phase 9 | R8 | Pending |
-| CONN-02 | Phase 9 | R8 | Pending |
-| CONN-03 | Phase 9 | R8 | Pending |
-| CONN-04 | Phase 9 | R8 | Pending |
+| CONN-01 | Phase 9 | R8 | Complete |
+| CONN-02 | Phase 9 | R8 | Complete |
+| CONN-03 | Phase 9 | R8 | Complete |
+| CONN-04 | Phase 9 | R8 | Complete |
 | COMP-01 | Phase 10 | R10 | Pending |
 | COMP-02 | Phase 10 | R10 | Pending |
 | COMP-03 | Phase 10 | R10 | Pending |
