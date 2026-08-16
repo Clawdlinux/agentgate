@@ -76,11 +76,11 @@ Each task uses one pull request with signed-off commits.
 
 ### Receipt Export
 
-- [ ] **EXPT-01**: An admin can export inclusive sequence bounds through `GET /v1/receipts/export?from=&to=`.
-- [ ] **EXPT-02**: Export returns sequence-ordered JSONL from one SQLite snapshot with bounded range validation.
-- [ ] **EXPT-03**: Export metadata binds requested bounds, actual bounds, count, anchor, keyset, and snapshot head.
-- [ ] **EXPT-04**: Full and partial exports verify offline using the same JSONL verifier.
-- [ ] **EXPT-05**: Export contains no raw parameters, credentials, upstream bodies, or unrestricted provider errors.
+- [x] **EXPT-01**: An admin can export inclusive sequence bounds through `GET /v1/receipts/export?from=&to=`.
+- [x] **EXPT-02**: Export returns sequence-ordered JSONL from one SQLite snapshot with bounded range validation.
+- [x] **EXPT-03**: Export metadata binds requested bounds, actual bounds, count, anchor, keyset, and snapshot head.
+- [x] **EXPT-04**: Full and partial exports verify offline using the same JSONL verifier.
+- [x] **EXPT-05**: Export contains no raw parameters, credentials, upstream bodies, or unrestricted provider errors.
 
 ### Attenuated Delegation
 
@@ -189,11 +189,11 @@ Each task uses one pull request with signed-off commits.
 | QST-03 | Phase 6 | R9 | Complete |
 | QST-04 | Phase 6 | R9 | Complete |
 | QST-05 | Phase 6 | R9 | Complete |
-| EXPT-01 | Phase 7 | R6 | Pending |
-| EXPT-02 | Phase 7 | R6 | Pending |
-| EXPT-03 | Phase 7 | R6 | Pending |
-| EXPT-04 | Phase 7 | R6 | Pending |
-| EXPT-05 | Phase 7 | R6 | Pending |
+| EXPT-01 | Phase 7 | R6 | Complete |
+| EXPT-02 | Phase 7 | R6 | Complete |
+| EXPT-03 | Phase 7 | R6 | Complete |
+| EXPT-04 | Phase 7 | R6 | Complete |
+| EXPT-05 | Phase 7 | R6 | Complete |
 | DELG-01 | Phase 8 | R7 | Pending |
 | DELG-02 | Phase 8 | R7 | Pending |
 | DELG-03 | Phase 8 | R7 | Pending |

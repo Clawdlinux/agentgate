@@ -17,7 +17,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 4: Synchronous Request-Path Ledger** - Commit gap-free receipts for authenticated action outcomes before successful responses. (completed 2026-08-14)
 - [x] **Phase 5: Independent Offline Verification** - Verify supplied receipt artifacts offline with pinned public trust. (completed 2026-08-14)
 - [x] **Phase 6: 5-Minute Quickstart and OSS Launch** - Prove a new operator can produce and verify a receipt, then launch. (completed 2026-08-16)
-- [ ] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact.
+- [x] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact. (completed 2026-08-16)
 - [ ] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage.
 - [ ] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors.
 - [ ] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence.
@@ -111,7 +111,7 @@ Phases 7 through 11 follow launch.
   5. A new operator completes every stated prerequisite and verification step in under 5 minutes.
 **Plans**: TBD
 
-### Phase 7: Signed Bounded Export
+### Phase 7: Signed Bounded Export (completed 2026-08-16)
 **Goal**: An admin can give an auditor a bounded JSONL artifact with verifiable snapshot context.
 **Depends on**: Phase 6 and the OSS launch
 **PRD task**: R6
