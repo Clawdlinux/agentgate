@@ -68,11 +68,11 @@ Each task uses one pull request with signed-off commits.
 
 ### Five-Minute Quickstart
 
-- [ ] **QST-01**: The README starts with the verified-receipt quickstart before architecture or product detail.
-- [ ] **QST-02**: A clean checkout starts AgentGate through `docker compose` without a host Go toolchain.
-- [ ] **QST-03**: The documented flow connects GitHub, performs one `/v1/act`, and verifies its SQLite receipt offline.
-- [ ] **QST-04**: Persistent database and signing state survive a container restart during the quickstart validation.
-- [ ] **QST-05**: A new operator completes every stated prerequisite and verification step in under five minutes.
+- [x] **QST-01**: The README starts with the verified-receipt quickstart before architecture or product detail.
+- [x] **QST-02**: A clean checkout starts AgentGate through `docker compose` without a host Go toolchain.
+- [x] **QST-03**: The documented flow connects GitHub, performs one `/v1/act`, and verifies its SQLite receipt offline.
+- [x] **QST-04**: Persistent database and signing state survive a container restart during the quickstart validation.
+- [x] **QST-05**: A new operator completes every stated prerequisite and verification step in under five minutes.
 
 ### Receipt Export
 
@@ -184,11 +184,11 @@ Each task uses one pull request with signed-off commits.
 | VER-09 | Phase 5 | R5 | Complete |
 | VER-10 | Phase 5 | R5 | Complete |
 | VER-11 | Phase 5 | R5 | Complete |
-| QST-01 | Phase 6 | R9 | Pending |
-| QST-02 | Phase 6 | R9 | Pending |
-| QST-03 | Phase 6 | R9 | Pending |
-| QST-04 | Phase 6 | R9 | Pending |
-| QST-05 | Phase 6 | R9 | Pending |
+| QST-01 | Phase 6 | R9 | Complete |
+| QST-02 | Phase 6 | R9 | Complete |
+| QST-03 | Phase 6 | R9 | Complete |
+| QST-04 | Phase 6 | R9 | Complete |
+| QST-05 | Phase 6 | R9 | Complete |
 | EXPT-01 | Phase 7 | R6 | Pending |
 | EXPT-02 | Phase 7 | R6 | Pending |
 | EXPT-03 | Phase 7 | R6 | Pending |
