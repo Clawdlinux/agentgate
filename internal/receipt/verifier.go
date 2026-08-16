@@ -70,25 +70,31 @@ type TrustedKey struct {
 
 type trustedKeyJSON struct {
 	KID           string  `json:"kid"`
-	PublicKey     string  `json:"public_key"`
+	PublicKeyHex  string  `json:"public_key_hex"`
 	ValidFromSeq  uint64  `json:"valid_from_seq"`
 	ValidUntilSeq *uint64 `json:"valid_until_seq"`
 }
 
-// LoadTrustedKeys parses a JSON array of trusted signer keys — the same
-// shape internal/signer.PubkeyHandler serves, saved once through a trusted
-// channel and never fetched over the network by the offline verifier.
+type trustFileJSON struct {
+	Keys []trustedKeyJSON `json:"keys"`
+}
+
+// LoadTrustedKeys parses a trust file with the exact shape
+// GET /v1/receipts/pubkey serves (`{"keys": [...]}`, `public_key_hex`) so
+// an operator can save that endpoint's response directly as the trust
+// file, through a trusted channel, with no field translation. The offline
+// verifier never fetches this over the network itself.
 func LoadTrustedKeys(data []byte) ([]TrustedKey, error) {
-	var raw []trustedKeyJSON
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var file trustFileJSON
+	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("receipt: parse trust file: %w", err)
 	}
-	if len(raw) == 0 {
+	if len(file.Keys) == 0 {
 		return nil, ErrNoTrustedKeys
 	}
-	out := make([]TrustedKey, 0, len(raw))
-	for _, k := range raw {
-		pub, err := hex.DecodeString(k.PublicKey)
+	out := make([]TrustedKey, 0, len(file.Keys))
+	for _, k := range file.Keys {
+		pub, err := hex.DecodeString(k.PublicKeyHex)
 		if err != nil || len(pub) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("receipt: trust file key %s: public_key must be %d bytes hex", k.KID, ed25519.PublicKeySize)
 		}
