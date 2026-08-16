@@ -1,0 +1,12 @@
+services:
+  google_workspace:
+    base_url: https://gmail.googleapis.com
+    auth:
+      type: oauth2
+      authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/gmail.labels]
+    actions:
+      list_labels:
+        method: GET
+        path: /gmail/v1/users/me/labels
