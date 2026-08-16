@@ -22,6 +22,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,6 +57,14 @@ type RequestLimiter interface {
 	Allow(agentKeyID, service string) bool
 }
 
+// DelegationVerifier checks a presented Biscuit delegation token against
+// the specific request it accompanies and returns the ordered attenuation
+// commitments to store in the receipt (DELG-01, DELG-02, DELG-03). Backed
+// by *delegation.Verifier in production.
+type DelegationVerifier interface {
+	Verify(token []byte, humanPrincipal, agentKeyID, service, action string, now time.Time) ([]string, error)
+}
+
 // ReceiptRecorder commits one signed receipt for an action attempt.
 // Backed by *receipt.Ledger in production.
 type ReceiptRecorder interface {
@@ -68,9 +77,10 @@ type Config struct {
 	Vault      vault.Store
 	HTTPClient *http.Client
 	Logger     *slog.Logger
-	Authorizer AgentAuthorizer // required: verifies API keys and scopes
-	Receipts   ReceiptRecorder // required: commits one receipt per attempt
-	Limiter    RequestLimiter  // optional: nil disables rate limiting
+	Authorizer AgentAuthorizer    // required: verifies API keys and scopes
+	Receipts   ReceiptRecorder    // required: commits one receipt per attempt
+	Limiter    RequestLimiter     // optional: nil disables rate limiting
+	Delegation DelegationVerifier // optional: nil rejects any request presenting a delegation token
 }
 
 // Server is the gateway HTTP server.
@@ -178,9 +188,11 @@ func (s *Server) handleDescribeService(w http.ResponseWriter, r *http.Request) {
 // /v1/act call, once the request has a trustworthy agent identity and a
 // schema-valid body.
 type attempt struct {
-	agentKey   *auth.AgentKey
-	req        ActRequest
-	paramsHash [32]byte
+	agentKey        *auth.AgentKey
+	req             ActRequest
+	paramsHash      [32]byte
+	delegationToken []byte   // raw, not yet verified; set by prepareAttempt, verified by executeAttempt
+	delegationChain []string // set by executeAttempt once delegationToken verifies; empty for a direct grant (DELG-04)
 }
 
 // immediateResponse is written with no receipt: the request never reached
@@ -223,15 +235,16 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	draft := receipt.Draft{
-		HumanPrincipal: att.req.OnBehalfOf,
-		AgentKeyID:     att.agentKey.ID,
-		Service:        att.req.Service,
-		Action:         att.req.Action,
-		ParamsSHA256:   att.paramsHash,
-		PolicyDecision: out.policyDecision,
-		StatusCode:     out.status,
-		LatencyMS:      latencyMS,
-		Error:          out.errorCode,
+		HumanPrincipal:  att.req.OnBehalfOf,
+		AgentKeyID:      att.agentKey.ID,
+		DelegationChain: att.delegationChain,
+		Service:         att.req.Service,
+		Action:          att.req.Action,
+		ParamsSHA256:    att.paramsHash,
+		PolicyDecision:  out.policyDecision,
+		StatusCode:      out.status,
+		LatencyMS:       latencyMS,
+		Error:           out.errorCode,
 	}
 
 	if _, err := s.cfg.Receipts.Append(receiptCtx, draft); err != nil {
@@ -313,15 +326,39 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 		}}
 	}
 
-	return &attempt{agentKey: agentKey, req: req, paramsHash: paramsHash}, nil
+	return &attempt{agentKey: agentKey, req: req, paramsHash: paramsHash, delegationToken: extractDelegationToken(r)}, nil
 }
 
 // executeAttempt runs every check and side effect after authentication and
-// shape validation: scope, rate limit, registry lookup, vault fetch, and
-// upstream dispatch. It never writes to an http.ResponseWriter — every
-// exit is captured in outcome so handleAct can commit a receipt before any
-// response is written.
+// shape validation: delegation, scope, rate limit, registry lookup, vault
+// fetch, and upstream dispatch. It never writes to an http.ResponseWriter —
+// every exit is captured in outcome so handleAct can commit a receipt
+// before any response is written.
 func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
+	if len(att.delegationToken) > 0 {
+		// Verified before registry, vault, or upstream access (DELG-01); a
+		// gateway with no configured verifier fails closed rather than
+		// silently accepting an unverified claim of delegated authority.
+		if s.cfg.Delegation == nil {
+			return &outcome{
+				status:         http.StatusForbidden,
+				body:           ErrorResponse{Error: "delegation is not configured on this gateway", Code: "delegation_denied"},
+				policyDecision: "deny",
+				errorCode:      "delegation_denied",
+			}
+		}
+		chain, err := s.cfg.Delegation.Verify(att.delegationToken, att.req.OnBehalfOf, att.agentKey.ID, att.req.Service, att.req.Action, time.Now())
+		if err != nil {
+			return &outcome{
+				status:         http.StatusForbidden,
+				body:           ErrorResponse{Error: "delegation denied", Code: "delegation_denied"},
+				policyDecision: "deny",
+				errorCode:      "delegation_denied",
+			}
+		}
+		att.delegationChain = chain
+	}
+
 	if !att.agentKey.CanAccessService(att.req.Service) || !att.agentKey.CanAccessUser(att.req.OnBehalfOf) {
 		return &outcome{
 			status:         http.StatusForbidden,
@@ -437,6 +474,21 @@ func extractAPIKey(r *http.Request) string {
 	key := r.Header.Get("Authorization")
 	key = strings.TrimPrefix(key, "Bearer ")
 	return strings.TrimSpace(key)
+}
+
+// extractDelegationToken returns the raw Biscuit token bytes from the
+// X-Agentgate-Delegation header, base64-decoded (standard encoding). An
+// absent or empty header means no delegation is being claimed.
+func extractDelegationToken(r *http.Request) []byte {
+	encoded := strings.TrimSpace(r.Header.Get("X-Agentgate-Delegation"))
+	if encoded == "" {
+		return nil
+	}
+	token, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return []byte{0} // non-empty, deliberately invalid: fails verification rather than being silently ignored
+	}
+	return token
 }
 
 // injectAuth adds authentication headers to the upstream request.

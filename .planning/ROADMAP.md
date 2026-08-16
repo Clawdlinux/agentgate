@@ -18,7 +18,7 @@ Phases 7 through 11 follow launch.
 - [x] **Phase 5: Independent Offline Verification** - Verify supplied receipt artifacts offline with pinned public trust. (completed 2026-08-14)
 - [x] **Phase 6: 5-Minute Quickstart and OSS Launch** - Prove a new operator can produce and verify a receipt, then launch. (completed 2026-08-16)
 - [x] **Phase 7: Signed Bounded Export** - Give auditors a bounded, verifier-compatible JSONL artifact. (completed 2026-08-16)
-- [ ] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage.
+- [x] **Phase 8: Parent-Bound Biscuit Delegation** - Bind attenuated authority to verified requests and receipt lineage. (completed 2026-08-16)
 - [ ] **Phase 9: Google Workspace Featured Connector** - Add Gmail labels while keeping exactly 3 featured launch connectors.
 - [ ] **Phase 10: Sourced Product Comparison** - Publish qualified comparisons backed by current first-party evidence.
 - [ ] **Phase 11: Contributor Entry Path** - Document contribution rules and open exactly 6 scoped starter issues.
@@ -125,7 +125,7 @@ Phases 7 through 11 follow launch.
   5. Exported artifacts contain no raw parameters, credentials, upstream bodies, or unrestricted provider errors.
 **Plans**: TBD
 
-### Phase 8: Parent-Bound Biscuit Delegation
+### Phase 8: Parent-Bound Biscuit Delegation (completed 2026-08-16)
 **Goal**: Agents can present attenuated authority that AgentGate verifies and binds to receipt lineage before dispatch.
 **Depends on**: Phase 7
 **PRD task**: R7

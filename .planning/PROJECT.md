@@ -25,10 +25,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] Phase 5 shipped `agentgate-verify`, an offline verifier that reads SQLite or JSONL receipt chains against a locally saved trust file and detects modified, deleted, inserted, and forged records with deterministic exit codes.
 - [x] Phase 6 wired admin/OAuth account linking into the production command for the first time, fixed a previously undiscovered missing-config-file bug, and validated a real clone-to-verified-receipt flow against a live Docker daemon and the real GitHub API in under five minutes of mechanical time — the OSS launch gate is cleared.
 - [x] Phase 7 shipped `GET /v1/receipts/export`, a signed, snapshot-consistent bounded JSONL export whose manifest embeds its own trust keys, and extended `agentgate-verify` to verify full or partial exports with no separate trust file required.
+- [x] Phase 8 wired `github.com/biscuit-auth/biscuit-go` into the request path: AgentGate verifies a presented Biscuit's signature chain and binds its grant to the actual request (agent, principal, service, action, expiry) before any registry, vault, or upstream access, records ordered attenuation-path commitments in the receipt, and denies (while still receipting) two distinct constructed scope-widening/splicing attempts.
 
 ### Active
 
-- [ ] Bind attenuated Biscuit delegation chains to their parent grants.
 - [ ] Add Google Workspace to the featured launch connectors while retaining Stripe support.
 - [ ] Publish sourced competitor comparisons and contribution guidance.
 - [ ] Seed six scoped `good first issue` tasks after contributor documentation lands.
@@ -90,6 +90,8 @@ Phase 1 established the Apache License 2.0 source-release basis. It does not cle
 | Launch only after offline verification and quickstart land | A receipt without verifier adoption is not the product claim | Implemented (Phase 6) |
 | `VerifyChain` requires an explicit Anchor rather than an implicit nil-means-genesis default | Ambiguous verifier defaults have already caused a silent-acceptance bug this milestone (Phase 5's `ValidUntilSeq`) | Implemented (Phase 7) |
 | Exported JSONL embeds its own signed trust keys instead of requiring a larger `--trust-root` | Self-contained artifacts let an auditor verify without a side channel for key distribution | Implemented (Phase 7) |
+| Use Biscuit (existing token format) toward two IETF drafts rather than a new delegation spec | Non-Goals explicitly rule out inventing a new token format | Implemented (Phase 8) |
+| A denied delegation is still receipted rather than treated as a pre-identity rejection | The one place a rejected delegation attempt is most worth auditing must not produce zero evidence | Implemented (Phase 8) |
 
 ## Evolution
 

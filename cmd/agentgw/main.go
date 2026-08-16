@@ -25,6 +25,7 @@ import (
 	"github.com/Clawdlinux/agentgate/internal/admin"
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
+	"github.com/Clawdlinux/agentgate/internal/delegation"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
 	"github.com/Clawdlinux/agentgate/internal/oauth"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
@@ -107,6 +108,18 @@ func main() {
 	ledger := receipt.NewLedger(database, signerStore)
 	limiter := ratelimit.New(nil) // no per-service limits configured yet; Allow() is a pass-through
 
+	delegationRoot, err := delegation.NewRootStore(database, masterKey)
+	if err != nil {
+		logger.Error("init delegation root store", "error", err)
+		os.Exit(1)
+	}
+	rootPub, _, err := delegationRoot.LoadOrCreateRoot()
+	if err != nil {
+		logger.Error("load or create delegation root key", "error", err)
+		os.Exit(1)
+	}
+	delegationVerifier := delegation.NewVerifier(rootPub)
+
 	srv := gateway.New(gateway.Config{
 		Registry:   reg,
 		Vault:      vaultStore,
@@ -114,6 +127,7 @@ func main() {
 		Authorizer: keyStore,
 		Receipts:   ledger,
 		Limiter:    limiter,
+		Delegation: delegationVerifier,
 	})
 
 	adminSecret := os.Getenv("AGENTGATE_ADMIN_SECRET")
