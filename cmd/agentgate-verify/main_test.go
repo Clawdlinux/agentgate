@@ -23,9 +23,13 @@ import (
 
 type trustedKeyJSON struct {
 	KID           string  `json:"kid"`
-	PublicKey     string  `json:"public_key"`
+	PublicKeyHex  string  `json:"public_key_hex"`
 	ValidFromSeq  uint64  `json:"valid_from_seq"`
 	ValidUntilSeq *uint64 `json:"valid_until_seq"`
+}
+
+type trustFileJSON struct {
+	Keys []trustedKeyJSON `json:"keys"`
 }
 
 func testMasterKey() []byte {
@@ -82,12 +86,12 @@ func buildTestChain(t *testing.T, n int) (dbPath, trustPath string, receipts []r
 	for _, k := range keys {
 		trusted = append(trusted, trustedKeyJSON{
 			KID:           k.KID,
-			PublicKey:     hex.EncodeToString(k.PublicKey),
+			PublicKeyHex:  hex.EncodeToString(k.PublicKey),
 			ValidFromSeq:  k.ValidFromSeq,
 			ValidUntilSeq: k.ValidUntilSeq,
 		})
 	}
-	trustData, err := json.Marshal(trusted)
+	trustData, err := json.Marshal(trustFileJSON{Keys: trusted})
 	if err != nil {
 		t.Fatalf("marshal trust file: %v", err)
 	}
