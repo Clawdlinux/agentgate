@@ -9,22 +9,27 @@ Licensed under the Apache License, Version 2.0.
 //
 //	--source sqlite  Reads the receipts table from a local SQLite file.
 //	--source jsonl    Reads newline-delimited receipt JSON from --path
-//	                  (or stdin with --path -).
+//	                  (or stdin with --path -). A signed bounded export
+//	                  (GET /v1/receipts/export) embeds its own trusted
+//	                  keys and manifest as typed lines; --trust-root is
+//	                  then optional and, if omitted, the export's own
+//	                  embedded keys become the trust set.
 //
 // --trust-root points to a JSON file of trusted signer keys (the same
 // shape GET /v1/receipts/pubkey serves), saved once through a trusted
-// channel. --expected-head SEQ:HEXHASH additionally proves the checked
-// range is complete, not merely internally consistent.
+// channel; required unless the jsonl source embeds its own keys.
+// --expected-head SEQ:HEXHASH overrides any manifest-derived expected head
+// and additionally proves the checked range is complete, not merely
+// internally consistent.
 //
-// Exit codes: 0 = all requested checks passed, 1 = chain, key, or
-// signature mismatch, 2 = I/O, syntax, or configuration error.
+// Exit codes: 0 = all requested checks passed, 1 = chain, key, manifest,
+// or signature mismatch, 2 = I/O, syntax, or configuration error.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -50,8 +55,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	)
 	fs.StringVar(&source, "source", "", "receipt source: sqlite | jsonl")
 	fs.StringVar(&path, "path", "", "input path; '-' means stdin (jsonl source only)")
-	fs.StringVar(&trustRoot, "trust-root", "", "path to a JSON trust file (array of trusted signer keys)")
-	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH to additionally prove completeness")
+	fs.StringVar(&trustRoot, "trust-root", "", "path to a JSON trust file; optional if the jsonl source embeds its own keys")
+	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH; overrides a manifest-derived expected head")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -64,45 +69,71 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "agentgate-verify: --path is required")
 		return 2
 	}
-	if trustRoot == "" {
-		fmt.Fprintln(stderr, "agentgate-verify: --trust-root is required")
-		return 2
+
+	var explicitTrust []receipt.TrustedKey
+	if trustRoot != "" {
+		trustData, err := os.ReadFile(trustRoot)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentgate-verify: read trust root: %v\n", err)
+			return 2
+		}
+		explicitTrust, err = receipt.LoadTrustedKeys(trustData)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
+			return 2
+		}
 	}
 
-	trustData, err := os.ReadFile(trustRoot)
-	if err != nil {
-		fmt.Fprintf(stderr, "agentgate-verify: read trust root: %v\n", err)
-		return 2
-	}
-	trustedKeys, err := receipt.LoadTrustedKeys(trustData)
-	if err != nil {
-		fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
-		return 2
-	}
-
-	var expected *receipt.ExpectedHead
+	var explicitExpected *receipt.ExpectedHead
 	if expectedHead != "" {
 		eh, err := receipt.ParseExpectedHead(expectedHead)
 		if err != nil {
 			fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 			return 2
 		}
-		expected = &eh
+		explicitExpected = &eh
 	}
 
-	var receipts []receipt.Receipt
+	var (
+		receipts     []receipt.Receipt
+		embeddedKeys []receipt.TrustedKey
+		manifest     *receipt.ExportManifest
+		err          error
+	)
 	switch source {
 	case "sqlite":
 		receipts, err = readSQLite(path)
 	case "jsonl":
-		receipts, err = readJSONL(path)
+		receipts, embeddedKeys, manifest, err = readJSONL(path)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "agentgate-verify: read %s: %v\n", source, err)
 		return 2
 	}
 
-	result, err := receipt.VerifyChain(receipts, trustedKeys, expected)
+	trustedKeys := explicitTrust
+	if len(trustedKeys) == 0 {
+		if len(embeddedKeys) == 0 {
+			fmt.Fprintln(stderr, "agentgate-verify: --trust-root is required (the source has no embedded keys)")
+			return 2
+		}
+		trustedKeys = embeddedKeys
+	}
+
+	anchor := receipt.Anchor{}
+	expected := explicitExpected
+	if manifest != nil {
+		if err := receipt.VerifyManifest(*manifest, trustedKeys, embeddedKeys); err != nil {
+			fmt.Fprintf(stderr, "agentgate-verify: manifest: %v\n", err)
+			return 1
+		}
+		anchor = receipt.Anchor{Seq: manifest.AnchorSeq, EntryHash: manifest.AnchorHash}
+		if expected == nil {
+			expected = &receipt.ExpectedHead{Seq: manifest.ResolvedTo, EntryHash: manifest.LastEntryHash}
+		}
+	}
+
+	result, err := receipt.VerifyChain(receipts, trustedKeys, anchor, expected)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 		return 2
@@ -115,6 +146,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "completeness: proven against the supplied expected head")
 		} else {
 			fmt.Fprintln(stdout, "completeness: not claimed (no --expected-head supplied)")
+		}
+		if manifest != nil {
+			if manifest.ResolvedTo == manifest.HeadSeq {
+				fmt.Fprintln(stdout, "range: full (reaches the database's true head at export time)")
+			} else {
+				fmt.Fprintf(stdout, "range: partial (head at export time was seq=%d)\n", manifest.HeadSeq)
+			}
 		}
 		return 0
 	}
@@ -145,52 +183,29 @@ func readSQLite(path string) ([]receipt.Receipt, error) {
 
 	var out []receipt.Receipt
 	for rows.Next() {
-		var r receipt.Receipt
-		var formatVersion int
-		var delegationJSON string
-		var paramsSHA256, prevHash, entryHash, signature []byte
-
-		if err := rows.Scan(&r.Seq, &formatVersion, &r.TimestampUnixNS, &r.HumanPrincipal, &r.AgentKeyID,
-			&delegationJSON, &r.Service, &r.Action, &paramsSHA256, &r.PolicyDecision,
-			&r.StatusCode, &r.LatencyMS, &r.Error, &prevHash, &entryHash, &r.SignerKID, &signature); err != nil {
+		r, err := receipt.ScanReceiptRow(rows)
+		if err != nil {
 			return nil, err
-		}
-		if formatVersion != receipt.JSONLFormatVersion {
-			return nil, fmt.Errorf("%w: seq %d has format_version %d", receipt.ErrUnsupportedFormatVersion, r.Seq, formatVersion)
-		}
-		if err := json.Unmarshal([]byte(delegationJSON), &r.DelegationChain); err != nil {
-			return nil, fmt.Errorf("seq %d: delegation_chain_json: %w", r.Seq, err)
-		}
-		for _, f := range []struct {
-			name string
-			src  []byte
-			dst  []byte
-		}{
-			{"params_sha256", paramsSHA256, r.ParamsSHA256[:]},
-			{"prev_hash", prevHash, r.PrevHash[:]},
-			{"entry_hash", entryHash, r.EntryHash[:]},
-			{"signature", signature, r.Signature[:]},
-		} {
-			if len(f.src) != len(f.dst) {
-				return nil, fmt.Errorf("seq %d: %s: want %d bytes, got %d", r.Seq, f.name, len(f.dst), len(f.src))
-			}
-			copy(f.dst, f.src)
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-// readJSONL reads one receipt per non-empty line from path, or stdin when
-// path is "-".
-func readJSONL(path string) ([]receipt.Receipt, error) {
+// readJSONL reads path (or stdin when path is "-"), dispatching each
+// non-empty line by its "type" field: "key" lines accumulate into
+// embeddedKeys, a "manifest" line becomes manifest (at most one is
+// expected; a later one overwrites, since a well-formed export has
+// exactly one), and everything else ("receipt", or no "type" field at
+// all — Phase 5's original plain format) accumulates into receipts.
+func readJSONL(path string) (receipts []receipt.Receipt, embeddedKeys []receipt.TrustedKey, manifest *receipt.ExportManifest, err error) {
 	var rdr io.Reader
 	if path == "-" {
 		rdr = os.Stdin
 	} else {
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, err
+		f, ferr := os.Open(path)
+		if ferr != nil {
+			return nil, nil, nil, ferr
 		}
 		defer f.Close()
 		rdr = f
@@ -198,20 +213,36 @@ func readJSONL(path string) ([]receipt.Receipt, error) {
 
 	scanner := bufio.NewScanner(rdr)
 	scanner.Buffer(make([]byte, 1<<20), 1<<24)
-	var out []receipt.Receipt
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
 		}
-		r, err := receipt.ParseJSONLReceipt(line)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", len(out)+1, err)
+		switch receipt.DetectJSONLLineType(line) {
+		case "manifest":
+			m, perr := receipt.ParseManifestLine(line)
+			if perr != nil {
+				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
+			}
+			manifest = &m
+		case "key":
+			k, perr := receipt.ParseKeyLine(line)
+			if perr != nil {
+				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
+			}
+			embeddedKeys = append(embeddedKeys, k)
+		default:
+			r, perr := receipt.ParseJSONLReceipt(line)
+			if perr != nil {
+				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
+			}
+			receipts = append(receipts, r)
 		}
-		out = append(out, r)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	if serr := scanner.Err(); serr != nil {
+		return nil, nil, nil, serr
 	}
-	return out, nil
+	return receipts, embeddedKeys, manifest, nil
 }

@@ -71,7 +71,7 @@ func TestVerifyChain_ValidChainPasses(t *testing.T) {
 	receipts := appendN(t, ledger, 5)
 	trusted := trustedKeysFrom(t, store)
 
-	result, err := VerifyChain(receipts, trusted, nil)
+	result, err := VerifyChain(receipts, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestVerifyChain_ModifiedReceiptFails(t *testing.T) {
 
 	receipts[2].StatusCode = 404 // modify a field after the fact (still a valid field value); entry_hash no longer matches
 
-	result, err := VerifyChain(receipts, trusted, nil)
+	result, err := VerifyChain(receipts, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestVerifyChain_InteriorDeletedReceiptFails(t *testing.T) {
 	// Delete the interior row at seq 3.
 	tampered := append(append([]Receipt{}, receipts[:2]...), receipts[3:]...)
 
-	result, err := VerifyChain(tampered, trusted, nil)
+	result, err := VerifyChain(tampered, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestVerifyChain_InsertedReceiptFails(t *testing.T) {
 
 	tampered := append(append([]Receipt{}, chainA...), foreign)
 
-	result, err := VerifyChain(tampered, trusted, nil)
+	result, err := VerifyChain(tampered, trusted, Anchor{}, nil)
 	if err == nil && result.OK {
 		t.Fatal("verification passed for a spliced-in foreign receipt")
 	}
@@ -167,7 +167,7 @@ func TestVerifyChain_ForgedSignatureFails(t *testing.T) {
 
 	receipts[1].Signature[0] ^= 0xFF // flip a byte; hash still matches, signature does not
 
-	result, err := VerifyChain(receipts, trusted, nil)
+	result, err := VerifyChain(receipts, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestVerifyChain_EmptyInputIsConfigError(t *testing.T) {
 	_, store := newTestLedgerAndStore(t)
 	trusted := trustedKeysFrom(t, store)
 
-	if _, err := VerifyChain(nil, trusted, nil); err != ErrEmptyChain {
+	if _, err := VerifyChain(nil, trusted, Anchor{}, nil); err != ErrEmptyChain {
 		t.Fatalf("err = %v, want ErrEmptyChain", err)
 	}
 }
@@ -200,7 +200,7 @@ func TestVerifyChain_NoTrustedKeysIsConfigError(t *testing.T) {
 	ledger, _ := newTestLedgerAndStore(t)
 	receipts := appendN(t, ledger, 1)
 
-	if _, err := VerifyChain(receipts, nil, nil); err != ErrNoTrustedKeys {
+	if _, err := VerifyChain(receipts, nil, Anchor{}, nil); err != ErrNoTrustedKeys {
 		t.Fatalf("err = %v, want ErrNoTrustedKeys", err)
 	}
 }
@@ -217,7 +217,7 @@ func TestVerifyChain_UnknownSignerKIDIsConfigError(t *testing.T) {
 	_ = appendN(t, otherLedger, 1)
 	wrongTrust := trustedKeysFrom(t, otherStore)
 
-	_, err := VerifyChain(receipts, wrongTrust, nil)
+	_, err := VerifyChain(receipts, wrongTrust, Anchor{}, nil)
 	if err == nil {
 		t.Fatal("err = nil, want ErrUnknownSignerKID")
 	}
@@ -238,7 +238,7 @@ func TestVerifyChain_RotatedKeyBindsToItsValidityInterval(t *testing.T) {
 	all := append(append([]Receipt{}, before...), after...)
 	trusted := trustedKeysFrom(t, store)
 
-	result, err := VerifyChain(all, trusted, nil)
+	result, err := VerifyChain(all, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestVerifyChain_RotatedKeyBindsToItsValidityInterval(t *testing.T) {
 	// Re-point prev_hash/seq stay the same; only signer_kid is wrong, so
 	// this must fail on the interval check before signature verification
 	// even gets a chance to also fail.
-	result2, err := VerifyChain(tampered, trusted, nil)
+	result2, err := VerifyChain(tampered, trusted, Anchor{}, nil)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestVerifyChain_ExpectedHeadProvesCompleteness(t *testing.T) {
 	trusted := trustedKeysFrom(t, store)
 	last := receipts[len(receipts)-1]
 
-	result, err := VerifyChain(receipts, trusted, &ExpectedHead{Seq: last.Seq, EntryHash: last.EntryHash})
+	result, err := VerifyChain(receipts, trusted, Anchor{}, &ExpectedHead{Seq: last.Seq, EntryHash: last.EntryHash})
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestVerifyChain_ExpectedHeadMismatchDetectsTruncation(t *testing.T) {
 
 	truncated := receipts[:2] // internally valid, but the tail is missing
 
-	result, err := VerifyChain(truncated, trusted, &ExpectedHead{Seq: 4, EntryHash: receipts[3].EntryHash})
+	result, err := VerifyChain(truncated, trusted, Anchor{}, &ExpectedHead{Seq: 4, EntryHash: receipts[3].EntryHash})
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
@@ -320,5 +320,56 @@ func TestParseExpectedHead(t *testing.T) {
 
 	if _, err := ParseExpectedHead("not-valid"); err == nil {
 		t.Fatal("expected an error for a malformed --expected-head value")
+	}
+}
+
+// TestVerifyChain_NonGenesisAnchorVerifiesMidChainSlice covers the Anchor
+// API added for bounded/partial exports (Phase 7): a slice that starts
+// mid-chain must verify successfully when given the real predecessor's
+// (seq, entry_hash) as its Anchor, proving VerifyChain no longer requires
+// every verified chain to start at seq=1.
+func TestVerifyChain_NonGenesisAnchorVerifiesMidChainSlice(t *testing.T) {
+	t.Parallel()
+	ledger, store := newTestLedgerAndStore(t)
+	receipts := appendN(t, ledger, 6)
+	trusted := trustedKeysFrom(t, store)
+
+	// seq 1..2 stand in for the anchor; seq 3..5 is the slice under test.
+	anchor := Anchor{Seq: 2, EntryHash: receipts[1].EntryHash}
+	slice := receipts[2:5]
+
+	result, err := VerifyChain(slice, trusted, anchor, nil)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("OK = false, reason = %s at seq %d", result.Reason, result.FailedAtSeq)
+	}
+	if result.VerifiedCount != 3 {
+		t.Fatalf("VerifiedCount = %d, want 3", result.VerifiedCount)
+	}
+}
+
+// TestVerifyChain_WrongAnchorHashDetected proves a forged or mismatched
+// anchor is rejected rather than silently accepted: an attacker cannot
+// splice a mid-chain slice onto a fabricated predecessor.
+func TestVerifyChain_WrongAnchorHashDetected(t *testing.T) {
+	t.Parallel()
+	ledger, store := newTestLedgerAndStore(t)
+	receipts := appendN(t, ledger, 6)
+	trusted := trustedKeysFrom(t, store)
+
+	wrongAnchor := Anchor{Seq: 2, EntryHash: receipts[0].EntryHash} // real seq=1 hash, not seq=2's
+	slice := receipts[2:5]
+
+	result, err := VerifyChain(slice, trusted, wrongAnchor, nil)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if result.OK {
+		t.Fatal("OK = true with a forged anchor hash")
+	}
+	if result.Reason != ReasonPrevHashMismatch {
+		t.Fatalf("Reason = %s, want %s", result.Reason, ReasonPrevHashMismatch)
 	}
 }

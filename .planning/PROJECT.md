@@ -24,10 +24,10 @@ Every agent action produces evidence that an independent auditor can verify offl
 - [x] Phase 4 wired every authenticated, schema-valid action attempt into one synchronous, chained, signed receipt commit before the HTTP response, replacing the in-memory vault and plaintext API-key map in the production command.
 - [x] Phase 5 shipped `agentgate-verify`, an offline verifier that reads SQLite or JSONL receipt chains against a locally saved trust file and detects modified, deleted, inserted, and forged records with deterministic exit codes.
 - [x] Phase 6 wired admin/OAuth account linking into the production command for the first time, fixed a previously undiscovered missing-config-file bug, and validated a real clone-to-verified-receipt flow against a live Docker daemon and the real GitHub API in under five minutes of mechanical time — the OSS launch gate is cleared.
+- [x] Phase 7 shipped `GET /v1/receipts/export`, a signed, snapshot-consistent bounded JSONL export whose manifest embeds its own trust keys, and extended `agentgate-verify` to verify full or partial exports with no separate trust file required.
 
 ### Active
 
-- [ ] Export bounded receipt ranges as verifier-compatible JSONL.
 - [ ] Bind attenuated Biscuit delegation chains to their parent grants.
 - [ ] Add Google Workspace to the featured launch connectors while retaining Stripe support.
 - [ ] Publish sourced competitor comparisons and contribution guidance.
@@ -88,6 +88,8 @@ Phase 1 established the Apache License 2.0 source-release basis. It does not cle
 | Resolve key rotation during signing work | Verification must account for every historical signer key ID | Implemented (Phase 3) |
 | Feature GitHub, Slack, and Google Workspace | These services reduce demo friction while Stripe remains available | Pending |
 | Launch only after offline verification and quickstart land | A receipt without verifier adoption is not the product claim | Implemented (Phase 6) |
+| `VerifyChain` requires an explicit Anchor rather than an implicit nil-means-genesis default | Ambiguous verifier defaults have already caused a silent-acceptance bug this milestone (Phase 5's `ValidUntilSeq`) | Implemented (Phase 7) |
+| Exported JSONL embeds its own signed trust keys instead of requiring a larger `--trust-root` | Self-contained artifacts let an auditor verify without a side channel for key distribution | Implemented (Phase 7) |
 
 ## Evolution
 
