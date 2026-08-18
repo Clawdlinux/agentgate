@@ -12,8 +12,10 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,6 +38,9 @@ import (
 )
 
 var version = "0.1.0-dev"
+
+//go:embed web/dashboard
+var dashboardFS embed.FS
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
@@ -152,6 +157,21 @@ func main() {
 	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
 	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
 	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
+
+	// The dashboard is a static single-page app served same-origin so its
+	// browser JS can call /v1/receipts/export without needing CORS on an
+	// admin-authenticated API. Serving the HTML needs no auth; the JS
+	// still requires the real X-Admin-Secret entered in the page itself.
+	dashboardRoot, err := fs.Sub(dashboardFS, "web/dashboard")
+	if err != nil {
+		logger.Error("mount dashboard assets", "error", err)
+		os.Exit(1)
+	}
+	mux.Handle("GET /dashboard/", http.StripPrefix("/dashboard/", http.FileServerFS(dashboardRoot)))
+	// Bare /dashboard has no trailing slash so it falls outside the FileServerFS mount above.
+	mux.HandleFunc("GET /dashboard", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/", http.StatusMovedPermanently)
+	})
 
 	httpSrv := &http.Server{
 		Addr:         *addr,

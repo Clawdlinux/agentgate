@@ -24,3 +24,6 @@ Thumbs.db
 
 # Go
 vendor/
+
+# Internal planning docs (not OSS-ready)
+/PRD-*.md
