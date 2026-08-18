@@ -375,6 +375,11 @@ function short(hex, n = 8) {
 function isZeroHash(hex) {
   return /^0+$/.test(hex);
 }
+// Receipt fields (human_principal, service, action, error) are attacker-controlled
+// via the /v1/act request body — escape before interpolating into innerHTML.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function chainIcon(ok) {
   return ok
     ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="1.6"/></svg>'
@@ -437,14 +442,14 @@ function renderTable(receipts) {
       <tr style="animation-delay:${Math.min(i, 12) * 18}ms">
         <td class="num">${r.seq}</td>
         <td>${fmtTime(r.timestamp_unix_ns)}</td>
-        <td class="principal" title="${r.human_principal}">${r.human_principal}</td>
-        <td class="action-cell" title="${r.service} / ${r.action}"><b>${r.service}</b> / ${r.action}</td>
+        <td class="principal" title="${esc(r.human_principal)}">${esc(r.human_principal)}</td>
+        <td class="action-cell" title="${esc(r.service)} / ${esc(r.action)}"><b>${esc(r.service)}</b> / ${esc(r.action)}</td>
         <td><span class="badge ${r.policy_decision}">${r.policy_decision.replace('_', ' ')}</span></td>
         <td class="num">${r.status_code}</td>
         <td class="num">${r.latency_ms}&nbsp;ms</td>
-        <td class="error-cell">${r.error || '—'}</td>
+        <td class="error-cell">${esc(r.error) || '—'}</td>
         <td><span class="chain-link ${linked ? 'linked' : 'broken'}">${chainIcon(linked)}</span></td>
-        <td class="hash-cell" title="${r.entry_hash}">${short(r.entry_hash)}</td>
+        <td class="hash-cell" title="${esc(r.entry_hash)}">${esc(short(r.entry_hash))}</td>
       </tr>`;
     })
     .join('');
