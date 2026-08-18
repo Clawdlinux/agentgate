@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en" style="color-scheme: dark;">
+<head>
+<meta charset="UTF-8" />
+<title>AgentGate — Ledger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0a0b0f" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ---- Design tokens: "forensic ledger" — industrial, severe, one accent ---- */
+  :root {
+    --bg: #0a0b0f;
+    --bg-raised: #12141a;
+    --bg-inset: #07080b;
+    --line: #23262f;
+    --line-strong: #343844;
+    --ink: #e8eaee;
+    --ink-dim: #7d8494;
+    --ink-faint: #4b505e;
+    --seal: #3ee6b8;      /* the one accent: verification / chain integrity */
+    --seal-dim: rgba(62, 230, 184, 0.12);
+    --alarm: #ff6b6b;
+    --alarm-dim: rgba(255, 107, 107, 0.12);
+    --caution: #f5b95c;
+    --caution-dim: rgba(245, 185, 92, 0.12);
+    --radius: 3px;
+    --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background:
+      linear-gradient(var(--bg), var(--bg)),
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px);
+    color: var(--ink);
+    font: 14px/1.5 var(--font-mono);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  a, button { touch-action: manipulation; }
+
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--seal);
+    outline-offset: 2px;
+  }
+
+  /* ---- Masthead: differentiation anchor — a physical "ledger seal" mark ---- */
+  header.masthead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 28px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-inset);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .seal {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 1.5px solid var(--seal);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .brand .seal::after {
+    content: "";
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--seal);
+    box-shadow: 0 0 8px 1px var(--seal-dim);
+  }
+  .brand h1 {
+    font: 600 16px/1 var(--font-display);
+    letter-spacing: 0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .brand h1 .sub {
+    display: block;
+    font: 400 11px/1 var(--font-mono);
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-top: 5px;
+  }
+  #liveStatus {
+    font: 500 11px var(--font-mono);
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .container { max-width: 1180px; margin: 0 auto; padding: 28px; }
+
+  /* ---- Config bar ---- */
+  form.config {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: end;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 22px;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label {
+    font: 500 10.5px var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+  }
+  .field input {
+    background: var(--bg-inset);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font: 13px var(--font-mono);
+    min-width: 0;
+  }
+  .field input:focus-visible { border-color: var(--seal); }
+  .field.url input { width: 230px; }
+  .field.secret input { width: 240px; }
+
+  button {
+    font: 600 12.5px var(--font-display);
+    letter-spacing: 0.01em;
+    border-radius: var(--radius);
+    padding: 9px 16px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+  button.primary { background: var(--seal); color: #04211a; border-color: var(--seal); }
+  button.primary:hover { background: #5cf0c8; }
+  button.primary:disabled { background: var(--ink-faint); border-color: var(--ink-faint); color: var(--bg); cursor: progress; }
+  button.ghost {
+    background: transparent; color: var(--ink-dim); border-color: var(--line-strong);
+  }
+  button.ghost:hover { color: var(--ink); border-color: var(--ink-dim); }
+  button.ghost[aria-pressed="true"] { color: var(--seal); border-color: var(--seal); background: var(--seal-dim); }
+
+  /* ---- Stat cards ---- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 22px;
+  }
+  .card { background: var(--bg-raised); padding: 14px 16px; min-width: 0; }
+  .card .label {
+    font: 500 10px var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+  }
+  .card .value {
+    font: 600 21px var(--font-display);
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .card .value.mono {
+    font: 500 12px var(--font-mono);
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  .card.seal-ok .value { color: var(--seal); }
+  .card.seal-bad .value { color: var(--alarm); }
+  .card .value .pulse {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  .card.seal-ok .pulse { animation: pulse 2.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.82); }
+  }
+
+  /* ---- Ledger table: the differentiation anchor made literal ---- */
+  .ledger-wrap {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  caption { text-align: left; padding: 14px 16px 0; }
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font: 500 10px var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12.5px;
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr {
+    animation: rise 260ms ease backwards;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  td.num { font-variant-numeric: tabular-nums; }
+  td.principal { color: var(--ink); max-width: 140px; }
+  td.principal, td.action-cell, td.hash-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.action-cell { color: var(--ink-dim); max-width: 220px; }
+  td.action-cell b { color: var(--ink); font-weight: 600; }
+
+  .chain-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--ink-faint); font-size: 11px;
+  }
+  .chain-link svg { flex-shrink: 0; }
+  .chain-link.linked { color: var(--seal); }
+  .chain-link.broken { color: var(--alarm); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font: 600 10.5px var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .badge.allow { background: var(--seal-dim); color: var(--seal); }
+  .badge.deny { background: var(--alarm-dim); color: var(--alarm); }
+  .badge.rate_limited { background: var(--caution-dim); color: var(--caution); }
+
+  td.error-cell { color: var(--alarm); font-size: 11.5px; }
+  td.hash-cell { color: var(--ink-faint); font-size: 11px; }
+
+  .empty, .loading {
+    padding: 56px 20px;
+    text-align: center;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+  }
+  .empty .glyph, .loading .glyph {
+    font-size: 22px;
+    display: block;
+    margin-bottom: 10px;
+    color: var(--line-strong);
+  }
+  [role="status"].error-banner {
+    padding: 14px 16px;
+    color: var(--alarm);
+    background: var(--alarm-dim);
+    border: 1px solid var(--alarm);
+    border-radius: var(--radius);
+    font-size: 12.5px;
+  }
+
+  .verify-note {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+    color: var(--ink-dim);
+    font-size: 12px;
+  }
+  .verify-note strong { color: var(--ink); }
+  .verify-note code {
+    display: block;
+    margin-top: 8px;
+    padding: 9px 11px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--seal);
+    font-size: 11px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  ::selection { background: var(--seal-dim); color: var(--ink); }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="brand">
+    <span class="seal" aria-hidden="true"></span>
+    <h1>AgentGate<span class="sub">Signed Action Ledger</span></h1>
+  </div>
+  <span id="liveStatus" aria-live="polite">idle</span>
+</header>
+
+<main class="container">
+  <form class="config" id="configForm" autocomplete="off">
+    <div class="field url">
+      <label for="gwUrl">Gateway URL</label>
+      <input id="gwUrl" name="url" type="url" inputmode="url" placeholder="http://localhost:8080…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="field secret">
+      <label for="gwSecret">Admin Secret</label>
+      <input id="gwSecret" name="secret" type="password" autocomplete="off" spellcheck="false" placeholder="X-Admin-Secret…" />
+    </div>
+    <button class="primary" type="submit" id="loadBtn">Load Ledger</button>
+    <button class="ghost" type="button" id="autoBtn" aria-pressed="false">Auto-Refresh</button>
+  </form>
+
+  <section class="cards" id="cards" hidden aria-label="Ledger summary">
+    <div class="card"><div class="label">Head Seq</div><div class="value num" id="cHead">—</div></div>
+    <div class="card"><div class="label">Receipts In View</div><div class="value num" id="cCount">—</div></div>
+    <div class="card" id="cChainCard"><div class="label">Chain Continuity</div><div class="value" id="cChain">—</div></div>
+    <div class="card"><div class="label">Signer KID</div><div class="value mono" id="cSigner">—</div></div>
+    <div class="card"><div class="label">Keyset Digest</div><div class="value mono" id="cKeyset">—</div></div>
+  </section>
+
+  <div class="ledger-wrap" id="tableWrap" role="region" aria-label="Receipt ledger">
+    <div class="loading"><span class="glyph" aria-hidden="true">◌</span>Loading…</div>
+  </div>
+
+  <p class="verify-note">
+    <strong>What this view actually checks:</strong> each visible receipt&rsquo;s <code style="display:inline;padding:1px 5px;">prev_hash</code> is confirmed to equal the previous receipt&rsquo;s <code style="display:inline;padding:1px 5px;">entry_hash</code> &mdash; a tamper-evidence check run locally in your browser. It does <strong>not</strong> verify the Ed25519 signatures. For full offline cryptographic proof, run this from a terminal:
+    <code>docker compose exec agentgate sh -c 'wget -qO- http://localhost:8080/v1/receipts/pubkey > /tmp/trust.json &amp;&amp; agentgate-verify --source sqlite --path /data/agentgate.db --trust-root /tmp/trust.json'</code>
+  </p>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let autoTimer = null;
+
+const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+
+function loadConfig() {
+  $('#gwUrl').value = localStorage.getItem('ag_url') || (location.origin.startsWith('http') ? location.origin : 'http://localhost:8080');
+  $('#gwSecret').value = localStorage.getItem('ag_secret') || '';
+}
+function saveConfig(url, secret) {
+  localStorage.setItem('ag_url', url);
+  localStorage.setItem('ag_secret', secret);
+}
+function setStatus(text) {
+  $('#liveStatus').textContent = text;
+}
+function fmtTime(unixNs) {
+  const ms = Number(BigInt(unixNs) / 1000000n);
+  return dateFmt.format(new Date(ms));
+}
+function short(hex, n = 8) {
+  if (!hex) return '';
+  return hex.length > n * 2 ? `${hex.slice(0, n)}…${hex.slice(-n)}` : hex;
+}
+function isZeroHash(hex) {
+  return /^0+$/.test(hex);
+}
+function chainIcon(ok) {
+  return ok
+    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="1.6"/></svg>'
+    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 8l8 8M16 8l-8 8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+}
+
+async function fetchExport(baseUrl, secret) {
+  const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/receipts/export?from=1`, {
+    headers: { 'X-Admin-Secret': secret },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { /* non-JSON error body */ }
+    throw new Error(`HTTP ${res.status}${detail ? ' — ' + detail : ''}`);
+  }
+  const text = await res.text();
+  const lines = text.trim().length ? text.trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return {
+    manifest: lines.find((l) => l.type === 'manifest'),
+    receipts: lines.filter((l) => l.type === 'receipt'),
+  };
+}
+
+function checkChainContinuity(receipts, anchorHash) {
+  let expectedPrev = anchorHash;
+  for (const r of receipts) {
+    if (r.prev_hash !== expectedPrev) return false;
+    expectedPrev = r.entry_hash;
+  }
+  return true;
+}
+
+function renderCards(manifest, receipts) {
+  $('#cards').hidden = false;
+  $('#cHead').textContent = manifest.head_seq;
+  $('#cCount').textContent = receipts.length;
+  $('#cSigner').textContent = manifest.signer_kid;
+  $('#cKeyset').textContent = short(manifest.keyset_digest, 14);
+
+  const anchorHash = isZeroHash(manifest.anchor_hash) ? '0'.repeat(64) : manifest.anchor_hash;
+  const ok = checkChainContinuity(receipts, anchorHash);
+  const card = $('#cChainCard');
+  const el = $('#cChain');
+  card.className = 'card ' + (ok ? 'seal-ok' : 'seal-bad');
+  el.innerHTML = `<span class="pulse" aria-hidden="true"></span>${ok ? 'Linked' : 'Broken'}`;
+}
+
+function renderTable(receipts) {
+  const wrap = $('#tableWrap');
+  if (receipts.length === 0) {
+    wrap.innerHTML = `<div class="empty"><span class="glyph" aria-hidden="true">▢</span>No receipts yet. Call <code>/v1/act</code> against this gateway to see activity here.</div>`;
+    return;
+  }
+  const rows = receipts
+    .slice()
+    .reverse()
+    .map((r, i) => {
+      const linked = i === receipts.length - 1 ? true : r.prev_hash === receipts[receipts.length - 2 - i]?.entry_hash;
+      return `
+      <tr style="animation-delay:${Math.min(i, 12) * 18}ms">
+        <td class="num">${r.seq}</td>
+        <td>${fmtTime(r.timestamp_unix_ns)}</td>
+        <td class="principal" title="${r.human_principal}">${r.human_principal}</td>
+        <td class="action-cell" title="${r.service} / ${r.action}"><b>${r.service}</b> / ${r.action}</td>
+        <td><span class="badge ${r.policy_decision}">${r.policy_decision.replace('_', ' ')}</span></td>
+        <td class="num">${r.status_code}</td>
+        <td class="num">${r.latency_ms}&nbsp;ms</td>
+        <td class="error-cell">${r.error || '—'}</td>
+        <td><span class="chain-link ${linked ? 'linked' : 'broken'}">${chainIcon(linked)}</span></td>
+        <td class="hash-cell" title="${r.entry_hash}">${short(r.entry_hash)}</td>
+      </tr>`;
+    })
+    .join('');
+  wrap.innerHTML = `
+    <table>
+      <caption class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">Signed action receipts, most recent first</caption>
+      <thead>
+        <tr>
+          <th scope="col">Seq</th><th scope="col">Time</th><th scope="col">Principal</th>
+          <th scope="col">Service / Action</th><th scope="col">Decision</th><th scope="col">Status</th>
+          <th scope="col">Latency</th><th scope="col">Error</th><th scope="col">Chain</th><th scope="col">Entry Hash</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refresh() {
+  const url = $('#gwUrl').value.trim();
+  const secret = $('#gwSecret').value;
+  saveConfig(url, secret);
+  const btn = $('#loadBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  setStatus('loading…');
+  try {
+    const { manifest, receipts } = await fetchExport(url, secret);
+    renderCards(manifest, receipts);
+    renderTable(receipts);
+    setStatus(`updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}`);
+  } catch (err) {
+    $('#tableWrap').innerHTML = `<div role="status" class="error-banner" style="margin:16px;">Failed to load ledger: ${err.message}</div>`;
+    setStatus('error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load Ledger';
+  }
+}
+
+$('#configForm').addEventListener('submit', (e) => { e.preventDefault(); refresh(); });
+$('#autoBtn').addEventListener('click', () => {
+  const btn = $('#autoBtn');
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+    btn.setAttribute('aria-pressed', 'false');
+    btn.textContent = 'Auto-Refresh';
+  } else {
+    autoTimer = setInterval(refresh, 5000);
+    btn.setAttribute('aria-pressed', 'true');
+    btn.textContent = 'Auto-Refresh: 5s';
+    refresh();
+  }
+});
+
+loadConfig();
+refresh();
+</script>
+</body>
+</html>
+
