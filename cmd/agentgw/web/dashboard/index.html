@@ -444,7 +444,7 @@ function renderTable(receipts) {
         <td>${fmtTime(r.timestamp_unix_ns)}</td>
         <td class="principal" title="${esc(r.human_principal)}">${esc(r.human_principal)}</td>
         <td class="action-cell" title="${esc(r.service)} / ${esc(r.action)}"><b>${esc(r.service)}</b> / ${esc(r.action)}</td>
-        <td><span class="badge ${r.policy_decision}">${r.policy_decision.replace('_', ' ')}</span></td>
+        <td><span class="badge ${esc(r.policy_decision)}">${esc(r.policy_decision.replace('_', ' '))}</span></td>
         <td class="num">${r.status_code}</td>
         <td class="num">${r.latency_ms}&nbsp;ms</td>
         <td class="error-cell">${esc(r.error) || '—'}</td>
@@ -482,7 +482,7 @@ async function refresh() {
     renderTable(receipts);
     setStatus(`updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}`);
   } catch (err) {
-    $('#tableWrap').innerHTML = `<div role="status" class="error-banner" style="margin:16px;">Failed to load ledger: ${err.message}</div>`;
+    $('#tableWrap').innerHTML = `<div role="status" class="error-banner" style="margin:16px;">Failed to load ledger: ${esc(err.message)}</div>`;
     setStatus('error');
   } finally {
     btn.disabled = false;

@@ -153,6 +153,7 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 		manifest = SignManifest(manifest, activeKey.KID, priv)
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
 
 		manifestLine, mErr := MarshalManifestLine(manifest)
@@ -216,6 +217,7 @@ func parseExportRange(w http.ResponseWriter, r *http.Request) (from, to uint64, 
 
 func writeExportError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
