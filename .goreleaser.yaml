@@ -1,0 +1,120 @@
+version: 2
+
+project_name: agentgate
+
+before:
+  hooks:
+    - go mod tidy
+
+# mattn/go-sqlite3 is CGO-based, so this file only owns the Linux side of
+# the release (native amd64 + cross-compiled arm64 via aarch64-linux-gnu-gcc,
+# both buildable from one ubuntu-latest runner). GoReleaser Pro has a
+# split/merge feature for doing this across multiple native runners, but
+# that's a paid feature (goreleaser.com/resources/limitations/cgo) — this
+# is the free, single-runner-per-OS-family alternative. The macOS binaries
+# are built separately with plain `go build` on a macos-latest runner and
+# attached to the same GitHub release via `gh release upload`; see
+# .github/workflows/release.yml. Windows isn't built: cgo + sqlite3 + mingw
+# cross-compilation is a real source of flakiness and isn't worth adding
+# until there's actual demand for a native Windows binary (the Docker image
+# already covers that platform's users today).
+builds:
+  - id: linux-amd64
+    main: ./cmd/agentgw
+    binary: agentgw
+    env:
+      - CGO_ENABLED=1
+    goos: [linux]
+    goarch: [amd64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+  - id: linux-amd64-verify
+    main: ./cmd/agentgate-verify
+    binary: agentgate-verify
+    env:
+      - CGO_ENABLED=1
+    goos: [linux]
+    goarch: [amd64]
+    ldflags:
+      - -s -w
+  - id: linux-arm64
+    main: ./cmd/agentgw
+    binary: agentgw
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos: [linux]
+    goarch: [arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+  - id: linux-arm64-verify
+    main: ./cmd/agentgate-verify
+    binary: agentgate-verify
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos: [linux]
+    goarch: [arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - id: agentgate
+    ids: [linux-amd64, linux-amd64-verify, linux-arm64, linux-arm64-verify]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - configs/**/*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: "ghcr.io/clawdlinux/agentgate:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/clawdlinux/agentgate:latest"
+    image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+
+release:
+  github:
+    owner: Clawdlinux
+    name: agentgate
+  footer: |
+    **Verify this release**: every binary's SHA-256 is listed in
+    `checksums.txt` in this release's assets. This checks the *release
+    artifact* you downloaded — it's separate from `agentgate-verify`, which
+    verifies a *running gateway's* signed receipt chain.

@@ -1,0 +1,81 @@
+name: Release
+
+# mattn/go-sqlite3 is CGO-based, so this isn't a plain GOOS/GOARCH matrix.
+# GoReleaser Pro has a split/merge feature for building each platform on
+# its own native runner and combining them (goreleaser.com/resources/
+# limitations/cgo) — that's a paid feature. This is the free equivalent:
+# the `linux` job owns the actual GitHub release (creates it, uploads
+# Linux archives + checksums + changelog, builds/pushes the Docker
+# images), and the `darwin` job runs afterwards, builds macOS binaries
+# with plain `go build` on a native macos-latest runner, and attaches
+# them to that same release with `gh release upload`.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install cross toolchain and sqlite headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libsqlite3-dev
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  darwin:
+    needs: linux
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build darwin binaries and attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage="$(mktemp -d)"
+            CGO_ENABLED=1 GOOS=darwin GOARCH="${arch}" \
+              go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "${stage}/agentgw" ./cmd/agentgw
+            CGO_ENABLED=1 GOOS=darwin GOARCH="${arch}" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "${stage}/agentgate-verify" ./cmd/agentgate-verify
+            cp README.md LICENSE NOTICE "${stage}/"
+            cp -R configs "${stage}/"
+            tar -C "${stage}" -czf "dist/agentgate_${GITHUB_REF_NAME}_darwin_${arch}.tar.gz" .
+          done
+          (cd dist && shasum -a 256 ./*.tar.gz >> checksums.txt)
+          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/checksums.txt --clobber

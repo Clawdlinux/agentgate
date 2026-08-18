@@ -27,3 +27,4 @@ vendor/
 
 # Internal planning docs (not OSS-ready)
 /PRD-*.md
+dist/
