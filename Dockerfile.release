@@ -1,0 +1,21 @@
+# Used only by .goreleaser.yaml's `dockers:` section. GoReleaser already
+# cross-compiles agentgw/agentgate-verify for the target platform in the
+# `builds:` step before this runs, so this just packages the already-built
+# binaries -- it does not rebuild from source. (That's what the repo-root
+# `Dockerfile` does, for docker-compose/local dev, where the full source
+# tree is the build context. GoReleaser's docker build context only
+# contains this file, the prebuilt binaries, and whatever is listed under
+# `extra_files` in .goreleaser.yaml -- rebuilding from source in this
+# context isn't possible, since go.mod/go.sum/cmd/internal aren't there.)
+FROM alpine:3.21 AS assets
+RUN apk add --no-cache ca-certificates && mkdir /data
+
+FROM scratch
+COPY --from=assets /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=assets /data /data
+COPY agentgw /usr/local/bin/agentgate
+COPY agentgate-verify /usr/local/bin/agentgate-verify
+COPY configs/ /etc/agentgate/configs/
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/agentgate"]
+CMD ["--config", "/etc/agentgate/configs/services.yaml", "--db", "/data/agentgate.db", "--addr", ":8080"]

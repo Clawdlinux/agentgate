@@ -63,18 +63,22 @@ changelog:
 dockers:
   - image_templates:
       - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     goos: linux
     goarch: amd64
+    extra_files:
+      - configs
     build_flag_templates:
       - "--platform=linux/amd64"
   - image_templates:
       - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     goos: linux
     goarch: arm64
+    extra_files:
+      - configs
     build_flag_templates:
       - "--platform=linux/arm64"
 
