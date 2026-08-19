@@ -1,5 +1,7 @@
 # AgentGate
 
+[![CI](https://github.com/Clawdlinux/agentgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Clawdlinux/agentgate/actions/workflows/ci.yml)
+
 A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Google Workspace) on behalf of users. Agents never see tokens — the gateway handles OAuth, encrypted token storage, and request proxying. Every action gets a signed, gap-free receipt that anyone can verify offline, without AgentGate's secret key.
 
 ## Quickstart

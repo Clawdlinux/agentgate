@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  CGO_ENABLED: 0
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        # -race requires cgo (go: "-race requires cgo; enable cgo by
+        # setting CGO_ENABLED=1"). ubuntu-latest ships gcc via
+        # build-essential by default, so no apt-get install is needed
+        # here, unlike the sqlite3 dev headers this file used to install.
+        env:
+          CGO_ENABLED: 1
+        run: go test ./... -race
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: go mod tidy drift check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
