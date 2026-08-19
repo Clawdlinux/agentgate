@@ -6,62 +6,41 @@ before:
   hooks:
     - go mod tidy
 
-# mattn/go-sqlite3 is CGO-based, so this file only owns the Linux side of
-# the release (native amd64 + cross-compiled arm64 via aarch64-linux-gnu-gcc,
-# both buildable from one ubuntu-latest runner). GoReleaser Pro has a
-# split/merge feature for doing this across multiple native runners, but
-# that's a paid feature (goreleaser.com/resources/limitations/cgo) — this
-# is the free, single-runner-per-OS-family alternative. The macOS binaries
-# are built separately with plain `go build` on a macos-latest runner and
-# attached to the same GitHub release via `gh release upload`; see
-# .github/workflows/release.yml. Windows isn't built: cgo + sqlite3 + mingw
-# cross-compilation is a real source of flakiness and isn't worth adding
-# until there's actual demand for a native Windows binary (the Docker image
-# already covers that platform's users today).
+# github.com/Clawdlinux/agentgate/pull/20 replaced the CGO mattn/go-sqlite3
+# driver with the pure-Go modernc.org/sqlite. That's what makes this a plain
+# CGO_ENABLED=0 goos/goarch matrix buildable from one ubuntu-latest runner:
+# no split/merge (GoReleaser Pro only, see goreleaser.com/resources/
+# limitations/cgo), no cross-gcc for arm64, no separate macOS runner+job to
+# stitch binaries onto the release afterwards, and Windows is no longer a
+# reason to avoid mingw cross-compilation flakiness -- it's just another
+# goarch now.
 builds:
-  - id: linux-amd64
+  - id: agentgw
     main: ./cmd/agentgw
     binary: agentgw
     env:
-      - CGO_ENABLED=1
-    goos: [linux]
-    goarch: [amd64]
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}
-  - id: linux-amd64-verify
+  - id: agentgate-verify
     main: ./cmd/agentgate-verify
     binary: agentgate-verify
     env:
-      - CGO_ENABLED=1
-    goos: [linux]
-    goarch: [amd64]
-    ldflags:
-      - -s -w
-  - id: linux-arm64
-    main: ./cmd/agentgw
-    binary: agentgw
-    env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-    goos: [linux]
-    goarch: [arm64]
-    ldflags:
-      - -s -w -X main.version={{.Version}}
-  - id: linux-arm64-verify
-    main: ./cmd/agentgate-verify
-    binary: agentgate-verify
-    env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-    goos: [linux]
-    goarch: [arm64]
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
 
 archives:
   - id: agentgate
-    ids: [linux-amd64, linux-amd64-verify, linux-arm64, linux-arm64-verify]
+    ids: [agentgw, agentgate-verify]
     formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
@@ -118,3 +97,4 @@ release:
     `checksums.txt` in this release's assets. This checks the *release
     artifact* you downloaded — it's separate from `agentgate-verify`, which
     verifies a *running gateway's* signed receipt chain.
+
