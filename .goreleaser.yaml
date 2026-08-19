@@ -1,0 +1,100 @@
+version: 2
+
+project_name: agentgate
+
+before:
+  hooks:
+    - go mod tidy
+
+# github.com/Clawdlinux/agentgate/pull/20 replaced the CGO mattn/go-sqlite3
+# driver with the pure-Go modernc.org/sqlite. That's what makes this a plain
+# CGO_ENABLED=0 goos/goarch matrix buildable from one ubuntu-latest runner:
+# no split/merge (GoReleaser Pro only, see goreleaser.com/resources/
+# limitations/cgo), no cross-gcc for arm64, no separate macOS runner+job to
+# stitch binaries onto the release afterwards, and Windows is no longer a
+# reason to avoid mingw cross-compilation flakiness -- it's just another
+# goarch now.
+builds:
+  - id: agentgw
+    main: ./cmd/agentgw
+    binary: agentgw
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+  - id: agentgate-verify
+    main: ./cmd/agentgate-verify
+    binary: agentgate-verify
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - id: agentgate
+    ids: [agentgw, agentgate-verify]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - configs/**/*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: "ghcr.io/clawdlinux/agentgate:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/clawdlinux/agentgate:latest"
+    image_templates:
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-amd64"
+      - "ghcr.io/clawdlinux/agentgate:{{ .Version }}-arm64"
+
+release:
+  github:
+    owner: Clawdlinux
+    name: agentgate
+  footer: |
+    **Verify this release**: every binary's SHA-256 is listed in
+    `checksums.txt` in this release's assets. This checks the *release
+    artifact* you downloaded — it's separate from `agentgate-verify`, which
+    verifies a *running gateway's* signed receipt chain.
+
