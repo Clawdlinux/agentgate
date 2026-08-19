@@ -1,0 +1,52 @@
+name: CI
+
+# NOTE: as of this file's creation, main still uses github.com/mattn/go-sqlite3
+# (CGO), which is why this installs gcc + libsqlite3-dev and does not set
+# CGO_ENABLED=0. PR #20 (github.com/Clawdlinux/agentgate/pull/20) replaces that
+# driver with the pure-Go modernc.org/sqlite. Once #20 merges, delete the
+# "Install sqlite build dependencies" step below and set CGO_ENABLED=0 in the
+# env for every step in this file.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install sqlite build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: go mod tidy drift check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
