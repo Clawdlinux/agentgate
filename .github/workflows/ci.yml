@@ -1,17 +1,13 @@
 name: CI
 
-# NOTE: as of this file's creation, main still uses github.com/mattn/go-sqlite3
-# (CGO), which is why this installs gcc + libsqlite3-dev and does not set
-# CGO_ENABLED=0. PR #20 (github.com/Clawdlinux/agentgate/pull/20) replaces that
-# driver with the pure-Go modernc.org/sqlite. Once #20 merges, delete the
-# "Install sqlite build dependencies" step below and set CGO_ENABLED=0 in the
-# env for every step in this file.
-
 on:
   pull_request:
   push:
     branches:
       - main
+
+env:
+  CGO_ENABLED: 0
 
 jobs:
   ci:
@@ -22,18 +18,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Install sqlite build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          for attempt in 1 2 3; do
-            if timeout 120 sudo apt-get update && timeout 120 sudo apt-get install -y --no-install-recommends gcc libsqlite3-dev; then
-              exit 0
-            fi
-            echo "apt-get attempt ${attempt} failed or timed out, retrying..."
-          done
-          exit 1
 
       - name: go build
         run: go build ./...
