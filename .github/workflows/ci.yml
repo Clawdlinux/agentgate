@@ -27,8 +27,13 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libsqlite3-dev
+          for attempt in 1 2 3; do
+            if timeout 120 sudo apt-get update && timeout 120 sudo apt-get install -y --no-install-recommends gcc libsqlite3-dev; then
+              exit 0
+            fi
+            echo "apt-get attempt ${attempt} failed or timed out, retrying..."
+          done
+          exit 1
 
       - name: go build
         run: go build ./...
