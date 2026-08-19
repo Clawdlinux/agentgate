@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
@@ -148,7 +148,7 @@ func TestRun_SQLite_ValidChainExitsZero(t *testing.T) {
 func TestRun_SQLite_ModifiedRowExitsOne(t *testing.T) {
 	dbPath, trustPath, _ := buildTestChain(t, 5)
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestRun_SQLite_ModifiedRowExitsOne(t *testing.T) {
 func TestRun_SQLite_DeletedRowExitsOne(t *testing.T) {
 	dbPath, trustPath, _ := buildTestChain(t, 5)
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestRun_SQLite_InsertedRowExitsOne(t *testing.T) {
 	otherDBPath, _, otherReceipts := buildTestChain(t, 1)
 	_ = otherDBPath
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestRun_SQLite_InsertedRowExitsOne(t *testing.T) {
 func TestRun_SQLite_ForgedSignatureExitsOne(t *testing.T) {
 	dbPath, trustPath, receipts := buildTestChain(t, 3)
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

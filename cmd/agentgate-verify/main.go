@@ -35,7 +35,7 @@ import (
 	"io"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 )
@@ -165,7 +165,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // readSQLite reads every row of the receipts table, ordered by seq, from a
 // local file. It never writes to the database.
 func readSQLite(path string) ([]receipt.Receipt, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
