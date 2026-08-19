@@ -26,6 +26,12 @@ jobs:
         run: go vet ./...
 
       - name: go test -race
+        # -race requires cgo (go: "-race requires cgo; enable cgo by
+        # setting CGO_ENABLED=1"). ubuntu-latest ships gcc via
+        # build-essential by default, so no apt-get install is needed
+        # here, unlike the sqlite3 dev headers this file used to install.
+        env:
+          CGO_ENABLED: 1
         run: go test ./... -race
 
       - name: gofmt
