@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/Clawdlinux/agentgate/internal/admin"
 	"github.com/Clawdlinux/agentgate/internal/auth"
