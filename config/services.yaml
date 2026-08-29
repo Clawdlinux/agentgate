@@ -94,3 +94,15 @@ services:
       list_labels:
         method: GET
         path: /gmail/v1/users/me/labels
+
+  calendly:
+    base_url: https://api.calendly.com
+    auth:
+      type: bearer
+    actions:
+      list_scheduled_events:
+        method: GET
+        path: /scheduled_events
+        params:
+          user: string
+          count: "int?"
