@@ -77,10 +77,11 @@ type Config struct {
 	Vault      vault.Store
 	HTTPClient *http.Client
 	Logger     *slog.Logger
-	Authorizer AgentAuthorizer    // required: verifies API keys and scopes
-	Receipts   ReceiptRecorder    // required: commits one receipt per attempt
-	Limiter    RequestLimiter     // optional: nil disables rate limiting
-	Delegation DelegationVerifier // optional: nil rejects any request presenting a delegation token
+	Authorizer AgentAuthorizer              // required: verifies API keys and scopes
+	Receipts   ReceiptRecorder              // required: commits one receipt per attempt
+	Limiter    RequestLimiter               // optional: nil disables rate limiting
+	Delegation DelegationVerifier           // optional: nil rejects any request presenting a delegation token
+	Refreshers map[string]vault.RefreshFunc // optional: refreshes expiring OAuth tokens by service
 }
 
 // Server is the gateway HTTP server.
@@ -399,8 +400,18 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 			errorCode:      "token_missing",
 		}
 	}
+	if refresher := s.cfg.Refreshers[att.req.Service]; refresher != nil {
+		tok, err = vault.GetOrRefresh(s.cfg.Vault, att.req.OnBehalfOf, att.req.Service, refresher)
+		if err != nil {
+			return &outcome{
+				status:         http.StatusForbidden,
+				body:           ErrorResponse{Error: "token expired — user must re-authenticate", Code: "token_expired"},
+				policyDecision: "allow",
+				errorCode:      "token_expired",
+			}
+		}
+	}
 	if tok.IsExpired() {
-		// TODO: auto-refresh using refresh_token
 		return &outcome{
 			status:         http.StatusForbidden,
 			body:           ErrorResponse{Error: "token expired — user must re-authenticate", Code: "token_expired"},

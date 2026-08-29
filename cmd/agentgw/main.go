@@ -124,6 +124,7 @@ func main() {
 		os.Exit(1)
 	}
 	delegationVerifier := delegation.NewVerifier(rootPub)
+	oauthProviders := buildOAuthProviders(reg, logger)
 
 	srv := gateway.New(gateway.Config{
 		Registry:   reg,
@@ -133,6 +134,7 @@ func main() {
 		Receipts:   ledger,
 		Limiter:    limiter,
 		Delegation: delegationVerifier,
+		Refreshers: buildTokenRefreshers(oauthProviders),
 	})
 
 	adminSecret := os.Getenv("AGENTGATE_ADMIN_SECRET")
@@ -145,7 +147,7 @@ func main() {
 		publicURL = "http://localhost:8080"
 	}
 
-	oauthHandler := oauth.NewCallbackHandler(buildOAuthProviders(reg, logger), vaultStore, masterKey, publicURL, logger)
+	oauthHandler := oauth.NewCallbackHandler(oauthProviders, vaultStore, masterKey, publicURL, logger)
 	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, adminSecret, logger)
 
 	mux := http.NewServeMux()
@@ -270,4 +272,12 @@ func buildOAuthProviders(reg *registry.Registry, logger *slog.Logger) map[string
 		}
 	}
 	return providers
+}
+
+func buildTokenRefreshers(providers map[string]*oauth.Provider) map[string]vault.RefreshFunc {
+	refreshers := make(map[string]vault.RefreshFunc, len(providers))
+	for name, provider := range providers {
+		refreshers[name] = oauth.NewRefreshFunc(provider)
+	}
+	return refreshers
 }

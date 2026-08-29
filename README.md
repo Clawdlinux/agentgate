@@ -251,6 +251,7 @@ if sdk.IsRateLimited(err) {
 4. **Signed receipts.** Every authenticated action attempt commits one Ed25519-signed, hash-chained receipt before the response is returned — verify offline with `agentgate-verify`, no gateway state or private key needed.
 5. **Rate limiting.** Per-(agent, service) token bucket prevents runaway API usage.
 6. **OAuth state encrypted** with AES-256-GCM and expires after 10 minutes.
+7. **OAuth refresh.** Configured OAuth providers refresh tokens expiring within 5 minutes before dispatch. A failed refresh returns `token_expired` without calling the SaaS API.
 
 ## Configuration
 
