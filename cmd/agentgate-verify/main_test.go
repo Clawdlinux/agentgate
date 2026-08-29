@@ -144,6 +144,86 @@ func TestRun_SQLite_ValidChainExitsZero(t *testing.T) {
 	}
 }
 
+func TestRun_JSONFormat_ValidChain(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 5)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath, "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	var result struct {
+		OK            bool   `json:"ok"`
+		VerifiedCount int    `json:"verified_count"`
+		HeadSeq       uint64 `json:"head_seq"`
+		HeadEntryHash string `json:"head_entry_hash"`
+		Complete      bool   `json:"complete"`
+		Reason        string `json:"reason"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if !result.OK || result.VerifiedCount != 5 || result.HeadSeq != 5 {
+		t.Fatalf("result = %+v, want valid 5-receipt chain", result)
+	}
+	if len(result.HeadEntryHash) != 64 || result.Complete || result.Reason != "" {
+		t.Fatalf("result = %+v, want safe full hash, no completeness claim, and no reason", result)
+	}
+}
+
+func TestRun_JSONFormat_TamperedChain(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 3)
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	dropAppendOnlyTriggers(t, db)
+	if _, err := db.Exec(`UPDATE receipts SET status_code = 404 WHERE seq = 2`); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath, "--format", "json"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr = %s", code, stderr.String())
+	}
+	var result struct {
+		OK            bool   `json:"ok"`
+		FailedAtSeq   uint64 `json:"failed_at_seq"`
+		Reason        string `json:"reason"`
+		VerifiedCount int    `json:"verified_count"`
+		TotalReceipts int    `json:"total_receipts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if result.OK || result.FailedAtSeq != 2 || result.Reason != receipt.ReasonEntryHashMismatch || result.VerifiedCount != 1 || result.TotalReceipts != 3 {
+		t.Fatalf("result = %+v, want entry-hash failure at seq 2", result)
+	}
+}
+
+func TestRun_TextFormatMatchesDefault(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 2)
+	args := []string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath}
+
+	var defaultOut, defaultErr, textOut, textErr bytes.Buffer
+	defaultCode := run(args, &defaultOut, &defaultErr)
+	textCode := run(append(args, "--format", "text"), &textOut, &textErr)
+	if defaultCode != textCode || !bytes.Equal(defaultOut.Bytes(), textOut.Bytes()) || !bytes.Equal(defaultErr.Bytes(), textErr.Bytes()) {
+		t.Fatalf("default (%d, %q, %q) != text (%d, %q, %q)", defaultCode, defaultOut.String(), defaultErr.String(), textCode, textOut.String(), textErr.String())
+	}
+}
+
+func TestRun_InvalidFormatExitsTwo(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--source", "jsonl", "--path", "x", "--format", "yaml"}, &stdout, &stderr)
+	if code != 2 || !bytes.Contains(stderr.Bytes(), []byte(`--format must be text or json`)) {
+		t.Fatalf("result = (%d, %q, %q), want format error", code, stdout.String(), stderr.String())
+	}
+}
+
 // TestRun_SQLite_ModifiedRowExitsOne covers VER-05 end to end.
 func TestRun_SQLite_ModifiedRowExitsOne(t *testing.T) {
 	dbPath, trustPath, _ := buildTestChain(t, 5)

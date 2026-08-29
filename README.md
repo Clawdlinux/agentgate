@@ -81,7 +81,8 @@ No network call happens during verification itself — `trust.json` is a
 pinned local file, and `agentgate-verify` only reads the local SQLite file.
 Pass `--expected-head <seq>:<hash>` (from a checkpoint recorded separately,
 e.g. at handoff to an auditor) to also assert completeness, not just chain
-integrity.
+integrity. For scripts, add `--format json` to receive one machine-readable
+result object while keeping the same exit codes.
 
 ### Development option
 
