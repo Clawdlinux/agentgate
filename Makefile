@@ -7,10 +7,10 @@ build-verify:
 	CGO_ENABLED=0 go build -o bin/agentgate-verify ./cmd/agentgate-verify
 
 run:
-	go run ./cmd/agentgw
+	CGO_ENABLED=0 go run ./cmd/agentgw
 
 test:
-	go test -v -count=1 ./...
+	CGO_ENABLED=0 go test -v -count=1 ./...
 
 docker:
 	docker-compose up --build
