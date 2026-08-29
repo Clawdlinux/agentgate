@@ -414,6 +414,109 @@ services:
 	}
 }
 
+func TestAct_RefreshesExpiringTokenBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer refreshed-token" {
+			t.Errorf("upstream authorization = %q, want refreshed token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[]`)
+	}))
+	defer upstream.Close()
+
+	reg := registry.New()
+	_ = reg.LoadBytes([]byte(fmt.Sprintf(`
+services:
+  github:
+    base_url: %s
+    auth:
+      type: oauth2
+    actions:
+      list_repos:
+        method: GET
+        path: /user/repos
+`, upstream.URL)))
+
+	key := make([]byte, 32)
+	store, _ := vault.NewMemoryStore(key)
+	_ = store.Put("user-1", "github", vault.Token{
+		AccessToken:  "expired-token",
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(-time.Minute),
+	})
+
+	refreshed := false
+	srv := New(Config{
+		Registry: reg,
+		Vault:    store,
+		Authorizer: &fakeAuthorizer{keys: map[string]*auth.AgentKey{
+			"test-key": {ID: "test-agent", AllowedServices: []string{"*"}, AllowedUsers: []string{"*"}},
+		}},
+		Receipts: &fakeReceipts{},
+		Refreshers: map[string]vault.RefreshFunc{
+			"github": func(refreshToken string) (string, string, time.Duration, error) {
+				if refreshToken != "refresh-token" {
+					t.Errorf("refresh token = %q, want stored refresh token", refreshToken)
+				}
+				refreshed = true
+				return "refreshed-token", "rotated-refresh-token", time.Hour, nil
+			},
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/v1/act", strings.NewReader(`{"service":"github","action":"list_repos","on_behalf_of":"user-1"}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if !refreshed {
+		t.Fatal("refresh function was not called")
+	}
+	stored, err := store.Get("user-1", "github")
+	if err != nil {
+		t.Fatalf("get refreshed token: %v", err)
+	}
+	if stored.AccessToken != "refreshed-token" || stored.RefreshToken != "rotated-refresh-token" {
+		t.Fatalf("stored token = %+v, want refreshed values", stored)
+	}
+}
+
+func TestAct_RefreshFailureBlocksDispatchAndIsReceipted(t *testing.T) {
+	t.Parallel()
+
+	srv, store, receipts := testSetup(t)
+	_ = store.Put("user-1", "github", vault.Token{
+		AccessToken:  "expired-token",
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(-time.Minute),
+	})
+	srv.cfg.Refreshers = map[string]vault.RefreshFunc{
+		"github": func(string) (string, string, time.Duration, error) {
+			return "", "", 0, errors.New("provider rejected refresh token")
+		},
+	}
+
+	req := httptest.NewRequest("POST", "/v1/act", strings.NewReader(`{"service":"github","action":"list_repos","on_behalf_of":"user-1"}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	if receipts.count() != 1 {
+		t.Fatalf("receipts = %d, want 1", receipts.count())
+	}
+	if got := receipts.last().Error; got != "token_expired" {
+		t.Fatalf("receipt error = %q, want token_expired", got)
+	}
+}
+
 func TestAct_PathParams(t *testing.T) {
 	t.Parallel()
 

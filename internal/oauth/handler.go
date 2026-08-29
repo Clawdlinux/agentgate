@@ -150,17 +150,42 @@ func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string)
 		"client_secret": {provider.ClientSecret},
 		"redirect_uri":  {h.callbackBase + "/auth/callback/" + service},
 	}
+	tok, _, err := exchangeToken(provider, data)
+	return tok, err
+}
 
+// NewRefreshFunc returns the refresh-token exchange for one configured OAuth
+// provider. It returns an error when the provider omits an expiry because the
+// caller must not persist a token that will immediately be treated as expired.
+func NewRefreshFunc(provider *Provider) vault.RefreshFunc {
+	return func(refreshToken string) (string, string, time.Duration, error) {
+		tok, expiresIn, err := exchangeToken(provider, url.Values{
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {refreshToken},
+			"client_id":     {provider.ClientID},
+			"client_secret": {provider.ClientSecret},
+		})
+		if err != nil {
+			return "", "", 0, err
+		}
+		if expiresIn <= 0 {
+			return "", "", 0, fmt.Errorf("oauth: refresh response has no expires_in")
+		}
+		return tok.AccessToken, tok.RefreshToken, expiresIn, nil
+	}
+}
+
+func exchangeToken(provider *Provider, data url.Values) (*vault.Token, time.Duration, error) {
 	resp, err := http.PostForm(provider.TokenURL, data)
 	if err != nil {
-		return nil, fmt.Errorf("oauth: exchange: %w", err)
+		return nil, 0, fmt.Errorf("oauth: exchange: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("oauth: exchange returned %d: %s", resp.StatusCode, string(body))
+		return nil, 0, fmt.Errorf("oauth: exchange returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResp struct {
@@ -171,7 +196,7 @@ func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string)
 		Scope        string `json:"scope"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("oauth: parse token response: %w", err)
+		return nil, 0, fmt.Errorf("oauth: parse token response: %w", err)
 	}
 
 	tok := &vault.Token{
@@ -179,12 +204,13 @@ func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string)
 		RefreshToken: tokenResp.RefreshToken,
 		TokenType:    tokenResp.TokenType,
 	}
-	if tokenResp.ExpiresIn > 0 {
-		tok.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	expiresIn := time.Duration(tokenResp.ExpiresIn) * time.Second
+	if expiresIn > 0 {
+		tok.ExpiresAt = time.Now().Add(expiresIn)
 	}
 	if tokenResp.Scope != "" {
 		tok.Scopes = strings.Split(tokenResp.Scope, " ")
 	}
 
-	return tok, nil
+	return tok, expiresIn, nil
 }
