@@ -54,12 +54,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		trustRoot    string
 		expectedHead string
 		outputFormat string
+		quiet        bool
 	)
 	fs.StringVar(&source, "source", "", "receipt source: sqlite | jsonl")
 	fs.StringVar(&path, "path", "", "input path; '-' means stdin (jsonl source only)")
 	fs.StringVar(&trustRoot, "trust-root", "", "path to a JSON trust file; optional if the jsonl source embeds its own keys")
 	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH; overrides a manifest-derived expected head")
 	fs.StringVar(&outputFormat, "format", "text", "output format: text | json")
+	fs.BoolVar(&quiet, "quiet", false, "suppress successful verification details in text output")
+	fs.BoolVar(&quiet, "q", false, "suppress successful verification details in text output")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -161,6 +164,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "PASS: %d receipts verified, head seq=%d hash=%x\n",
 			result.VerifiedCount, result.HeadSeq, result.HeadEntryHash[:8])
+		if quiet {
+			return 0
+		}
 		if result.Complete {
 			fmt.Fprintln(stdout, "completeness: proven against the supplied expected head")
 		} else {
