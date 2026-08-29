@@ -82,7 +82,8 @@ pinned local file, and `agentgate-verify` only reads the local SQLite file.
 Pass `--expected-head <seq>:<hash>` (from a checkpoint recorded separately,
 e.g. at handoff to an auditor) to also assert completeness, not just chain
 integrity. For scripts, add `--format json` to receive one machine-readable
-result object while keeping the same exit codes.
+result object while keeping the same exit codes. Add `--quiet` (or `-q`) to
+text output to print only the `PASS:` summary on successful verification.
 
 ### Development option
 

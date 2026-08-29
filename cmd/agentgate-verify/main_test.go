@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -213,6 +214,59 @@ func TestRun_TextFormatMatchesDefault(t *testing.T) {
 	textCode := run(append(args, "--format", "text"), &textOut, &textErr)
 	if defaultCode != textCode || !bytes.Equal(defaultOut.Bytes(), textOut.Bytes()) || !bytes.Equal(defaultErr.Bytes(), textErr.Bytes()) {
 		t.Fatalf("default (%d, %q, %q) != text (%d, %q, %q)", defaultCode, defaultOut.String(), defaultErr.String(), textCode, textOut.String(), textErr.String())
+	}
+}
+
+func TestRun_QuietFormatPrintsOnlyPassSummary(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 2)
+	args := []string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath}
+
+	for _, quietFlag := range []string{"--quiet", "-q"} {
+		var stdout, stderr bytes.Buffer
+		code := run(append(args, quietFlag), &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("%s exit code = %d, want 0; stderr=%s", quietFlag, code, stderr.String())
+		}
+		if got := stdout.String(); !strings.HasPrefix(got, "PASS: ") || strings.Count(got, "\n") != 1 {
+			t.Fatalf("%s stdout = %q, want one PASS line", quietFlag, got)
+		}
+		if strings.Contains(stdout.String(), "completeness:") || strings.Contains(stdout.String(), "range:") {
+			t.Fatalf("%s stdout = %q, want no informational lines", quietFlag, stdout.String())
+		}
+	}
+}
+
+func TestRun_QuietFormatPreservesFailureOutput(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 3)
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	dropAppendOnlyTriggers(t, db)
+	if _, err := db.Exec(`UPDATE receipts SET status_code = 404 WHERE seq = 2`); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath}
+
+	var defaultOut, defaultErr, quietOut, quietErr bytes.Buffer
+	defaultCode := run(args, &defaultOut, &defaultErr)
+	quietCode := run(append(args, "--quiet"), &quietOut, &quietErr)
+	if defaultCode != 1 || quietCode != defaultCode || !bytes.Equal(defaultOut.Bytes(), quietOut.Bytes()) || !bytes.Equal(defaultErr.Bytes(), quietErr.Bytes()) {
+		t.Fatalf("default (%d, %q, %q) != quiet (%d, %q, %q)", defaultCode, defaultOut.String(), defaultErr.String(), quietCode, quietOut.String(), quietErr.String())
+	}
+}
+
+func TestRun_QuietDoesNotChangeJSONOutput(t *testing.T) {
+	dbPath, trustPath, _ := buildTestChain(t, 2)
+	args := []string{"--source", "sqlite", "--path", dbPath, "--trust-root", trustPath, "--format", "json"}
+
+	var jsonOut, jsonErr, quietJSONOut, quietJSONErr bytes.Buffer
+	jsonCode := run(args, &jsonOut, &jsonErr)
+	quietJSONCode := run(append(args, "--quiet"), &quietJSONOut, &quietJSONErr)
+	if jsonCode != 0 || quietJSONCode != jsonCode || !bytes.Equal(jsonOut.Bytes(), quietJSONOut.Bytes()) || !bytes.Equal(jsonErr.Bytes(), quietJSONErr.Bytes()) {
+		t.Fatalf("json (%d, %q, %q) != quiet json (%d, %q, %q)", jsonCode, jsonOut.String(), jsonErr.String(), quietJSONCode, quietJSONOut.String(), quietJSONErr.String())
 	}
 }
 
