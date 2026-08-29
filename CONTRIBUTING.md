@@ -6,15 +6,13 @@ and welcomes outside pull requests.
 ## Prerequisites
 
 - **Go 1.25.0** or later.
-- **CGO enabled** (`CGO_ENABLED=1`, the default on most systems) — the
-  SQLite driver (`mattn/go-sqlite3`) requires a C compiler (`gcc` or
-  `clang`) to be on your `PATH`.
 - **Docker** (optional) — only needed to run the full quickstart described
   in `README.md`; not required to build, test, or contribute code.
 
-No database, API keys, or secrets are needed to build or run the test
-suite. Every test either uses an in-memory/temp-file SQLite database or a
-local `httptest` server.
+No C compiler, database, API keys, or secrets are needed to build or run
+`make test`. The SQLite driver is pure Go. Every test either uses an
+in-memory/temp-file SQLite database or a local `httptest` server. The
+optional `-race` check below does require a C compiler.
 
 ## Build, test, and lint
 

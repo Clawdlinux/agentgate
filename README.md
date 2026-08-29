@@ -52,6 +52,12 @@ curl -s -X POST http://localhost:8080/admin/link \
 # open the returned authorize_url, click Authorize, then re-run the /v1/act call above
 ```
 
+**Inspect the receipt ledger.** Open
+[`http://localhost:8080/dashboard/`](http://localhost:8080/dashboard/) and
+enter the gateway URL, then the value of `AGENTGATE_ADMIN_SECRET`. The
+dashboard checks the visible receipt chain locally. Use the standalone
+verifier below for full cryptographic proof.
+
 ### Auditing, standalone
 
 Verification never depends on the gateway, Docker, or a Go toolchain — it
