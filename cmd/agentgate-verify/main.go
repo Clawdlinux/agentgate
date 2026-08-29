@@ -30,6 +30,7 @@ import (
 	"bufio"
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -52,12 +53,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		path         string
 		trustRoot    string
 		expectedHead string
+		outputFormat string
 	)
 	fs.StringVar(&source, "source", "", "receipt source: sqlite | jsonl")
 	fs.StringVar(&path, "path", "", "input path; '-' means stdin (jsonl source only)")
 	fs.StringVar(&trustRoot, "trust-root", "", "path to a JSON trust file; optional if the jsonl source embeds its own keys")
 	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH; overrides a manifest-derived expected head")
+	fs.StringVar(&outputFormat, "format", "text", "output format: text | json")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if outputFormat != "text" && outputFormat != "json" {
+		fmt.Fprintf(stderr, "agentgate-verify: --format must be text or json, got %q\n", outputFormat)
 		return 2
 	}
 
@@ -138,8 +145,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 		return 2
 	}
+	rangeKind := ""
+	if manifest != nil {
+		if manifest.ResolvedTo == manifest.HeadSeq {
+			rangeKind = "full"
+		} else {
+			rangeKind = "partial"
+		}
+	}
 
 	if result.OK {
+		if outputFormat == "json" {
+			writeJSONResult(stdout, result, rangeKind)
+			return 0
+		}
 		fmt.Fprintf(stdout, "PASS: %d receipts verified, head seq=%d hash=%x\n",
 			result.VerifiedCount, result.HeadSeq, result.HeadEntryHash[:8])
 		if result.Complete {
@@ -148,7 +167,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "completeness: not claimed (no --expected-head supplied)")
 		}
 		if manifest != nil {
-			if manifest.ResolvedTo == manifest.HeadSeq {
+			if rangeKind == "full" {
 				fmt.Fprintln(stdout, "range: full (reaches the database's true head at export time)")
 			} else {
 				fmt.Fprintf(stdout, "range: partial (head at export time was seq=%d)\n", manifest.HeadSeq)
@@ -156,10 +175,43 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	if outputFormat == "json" {
+		writeJSONResult(stdout, result, rangeKind)
+		return 1
+	}
 
 	fmt.Fprintf(stderr, "FAIL: seq=%d reason=%s (%d of %d receipts verified before failure)\n",
 		result.FailedAtSeq, result.Reason, result.VerifiedCount, result.TotalReceipts)
 	return 1
+}
+
+type jsonResult struct {
+	OK            bool   `json:"ok"`
+	TotalReceipts int    `json:"total_receipts"`
+	VerifiedCount int    `json:"verified_count"`
+	FailedAtSeq   uint64 `json:"failed_at_seq,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	HeadSeq       uint64 `json:"head_seq,omitempty"`
+	HeadEntryHash string `json:"head_entry_hash,omitempty"`
+	Complete      bool   `json:"complete"`
+	Range         string `json:"range,omitempty"`
+}
+
+func writeJSONResult(stdout io.Writer, result receipt.VerifyResult, rangeKind string) {
+	output := jsonResult{
+		OK:            result.OK,
+		TotalReceipts: result.TotalReceipts,
+		VerifiedCount: result.VerifiedCount,
+		FailedAtSeq:   result.FailedAtSeq,
+		Reason:        result.Reason,
+		HeadSeq:       result.HeadSeq,
+		Complete:      result.Complete,
+		Range:         rangeKind,
+	}
+	if result.OK {
+		output.HeadEntryHash = fmt.Sprintf("%x", result.HeadEntryHash)
+	}
+	_ = json.NewEncoder(stdout).Encode(output)
 }
 
 // readSQLite reads every row of the receipts table, ordered by seq, from a
