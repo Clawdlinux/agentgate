@@ -148,7 +148,7 @@ func main() {
 	}
 
 	oauthHandler := oauth.NewCallbackHandler(oauthProviders, vaultStore, masterKey, publicURL, logger)
-	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, adminSecret, logger)
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, adminSecret, logger)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", srv)
@@ -156,6 +156,7 @@ func main() {
 	mux.Handle("POST /admin/keys", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.CreateKey)))
 	mux.Handle("DELETE /admin/keys/{id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.RevokeKey)))
 	mux.Handle("POST /admin/link", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.LinkAccount)))
+	mux.Handle("POST /admin/tokens", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ConnectBearerToken)))
 	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
 	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
 	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
