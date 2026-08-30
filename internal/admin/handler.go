@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	"github.com/Clawdlinux/agentgate/internal/oauth"
+	"github.com/Clawdlinux/agentgate/internal/registry"
 	"github.com/Clawdlinux/agentgate/internal/vault"
 )
 
@@ -15,12 +17,13 @@ type Handler struct {
 	keyStore     *auth.KeyStore
 	oauthHandler *oauth.CallbackHandler
 	vault        vault.Store
+	registry     *registry.Registry
 	adminSecret  string
 	logger       *slog.Logger
 }
 
 // NewHandler creates the admin handler.
-func NewHandler(ks *auth.KeyStore, oh *oauth.CallbackHandler, v vault.Store, adminSecret string, logger *slog.Logger) *Handler {
+func NewHandler(ks *auth.KeyStore, oh *oauth.CallbackHandler, v vault.Store, reg *registry.Registry, adminSecret string, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -28,6 +31,7 @@ func NewHandler(ks *auth.KeyStore, oh *oauth.CallbackHandler, v vault.Store, adm
 		keyStore:     ks,
 		oauthHandler: oh,
 		vault:        v,
+		registry:     reg,
 		adminSecret:  adminSecret,
 		logger:       logger,
 	}
@@ -132,6 +136,37 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"authorize_url": authorizeURL})
+}
+
+// ConnectBearerToken stores a bearer token for a configured bearer service.
+func (h *Handler) ConnectBearerToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID      string `json:"user_id"`
+		Service     string `json:"service"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.Service = strings.TrimSpace(req.Service)
+	if req.UserID == "" || req.Service == "" || strings.TrimSpace(req.AccessToken) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id, service, and access_token are required"})
+		return
+	}
+	svc, err := h.registry.Get(req.Service)
+	if err != nil || svc.Auth.Type != "bearer" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "service does not accept bearer token connections"})
+		return
+	}
+	if err := h.vault.Put(req.UserID, req.Service, vault.Token{AccessToken: req.AccessToken, TokenType: "Bearer"}); err != nil {
+		h.logger.Error("store bearer token failed", "service", req.Service, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store bearer token"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ListTokens handles GET /admin/tokens/{user_id}.

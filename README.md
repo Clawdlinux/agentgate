@@ -206,6 +206,13 @@ Get OAuth authorization URL for user account linking.
 {"user_id": "user-42", "service": "github"}
 ```
 
+#### POST /admin/tokens
+Connect a bearer token for Slack, Stripe, or Calendly. The token is encrypted
+in the vault and never returned.
+```json
+{"user_id": "user-42", "service": "stripe", "access_token": "<stripe-token>"}
+```
+
 #### GET /admin/tokens/{user_id}
 List linked services for a user (no token values exposed).
 

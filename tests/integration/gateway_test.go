@@ -125,7 +125,7 @@ services:
 	}, vaultStore, masterKey, "http://localhost:8080", nil)
 
 	// Admin.
-	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, "admin-secret", nil)
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, "admin-secret", nil)
 
 	// Gateway — real dependencies throughout, matching production wiring.
 	gw := gateway.New(gateway.Config{
@@ -158,6 +158,13 @@ services:
 			return
 		}
 		adminHandler.LinkAccount(w, r)
+	})
+	mux.HandleFunc("POST /admin/tokens", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Admin-Secret") != "admin-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		adminHandler.ConnectBearerToken(w, r)
 	})
 
 	// OAuth callback.
@@ -362,6 +369,75 @@ func TestIntegration_AdminLinkAccount(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	if result["authorize_url"] == "" {
 		t.Fatal("missing authorize_url")
+	}
+}
+
+func TestIntegration_AdminConnectBearerTokenAndDispatch(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer stripe-test-token" {
+			t.Errorf("upstream authorization = %q, want bearer token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	defer upstream.Close()
+
+	ts, database, apiKey := setupIntegration(t, upstream.URL)
+	connectBody := `{"user_id":"bearer-user","service":"stripe","access_token":"stripe-test-token"}`
+	connectReq, _ := http.NewRequest("POST", ts.URL+"/admin/tokens", bytes.NewReader([]byte(connectBody)))
+	connectReq.Header.Set("Content-Type", "application/json")
+	connectReq.Header.Set("X-Admin-Secret", "admin-secret")
+	connectResp, err := http.DefaultClient.Do(connectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connectResp.Body.Close()
+	if connectResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(connectResp.Body)
+		t.Fatalf("connect status = %d, want 204; body=%s", connectResp.StatusCode, body)
+	}
+	if body, _ := io.ReadAll(connectResp.Body); len(body) != 0 {
+		t.Fatalf("connect response must not return the token, got %q", body)
+	}
+
+	actBody := `{"service":"stripe","action":"list_invoices","on_behalf_of":"bearer-user"}`
+	actReq, _ := http.NewRequest("POST", ts.URL+"/v1/act", bytes.NewReader([]byte(actBody)))
+	actReq.Header.Set("Authorization", "Bearer "+apiKey)
+	actReq.Header.Set("Content-Type", "application/json")
+	actResp, err := http.DefaultClient.Do(actReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actResp.Body.Close()
+	if actResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(actResp.Body)
+		t.Fatalf("action status = %d, want 200; body=%s", actResp.StatusCode, body)
+	}
+
+	var rawToken []byte
+	if err := database.QueryRow(`SELECT access_token_enc FROM tokens WHERE user_id = 'bearer-user' AND service = 'stripe'`).Scan(&rawToken); err != nil {
+		t.Fatalf("read stored token: %v", err)
+	}
+	if bytes.Contains(rawToken, []byte("stripe-test-token")) {
+		t.Fatal("stored bearer token is plaintext")
+	}
+}
+
+func TestIntegration_AdminConnectBearerTokenRejectsOAuthService(t *testing.T) {
+	ts, _, _ := setupIntegration(t, "")
+	body := `{"user_id":"user-99","service":"github","access_token":"must-not-store"}`
+	req, _ := http.NewRequest("POST", ts.URL+"/admin/tokens", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Secret", "admin-secret")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400; body=%s", resp.StatusCode, body)
 	}
 }
 
