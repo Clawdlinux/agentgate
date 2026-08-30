@@ -16,7 +16,7 @@ docker run -d --name agentgate \
   -e AGENTGATE_VAULT_KEY=dev-key-change-in-production-32b \
   -e AGENTGATE_ADMIN_SECRET=admin-dev-secret-change-me!! \
   -v $(pwd)/data:/data \
-  ghcr.io/clawdlinux/agentgate:0.1.1
+  ghcr.io/clawdlinux/agentgate:latest
 ```
 
 It bootstraps one agent API key on first boot and logs it once:
@@ -69,9 +69,9 @@ has never seen this repo:
 # while the gateway is up, once: save the trust root as a local file
 curl -s http://localhost:8080/v1/receipts/pubkey -o trust.json
 
-# download the verifier for your OS/arch from
-# https://github.com/Clawdlinux/agentgate/releases/tag/v0.1.1 — no other install step
-tar xzf agentgate_0.1.1_<os>_<arch>.tar.gz
+# download the verifier archive matching your OS/arch from
+# https://github.com/Clawdlinux/agentgate/releases/latest — no other install step
+tar xzf agentgate_<version>_<os>_<arch>.tar.gz
 
 ./agentgate-verify --source sqlite --path ./data/agentgate.db --trust-root ./trust.json
 # PASS: 1 receipts verified, head seq=1 hash=...
