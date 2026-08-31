@@ -30,6 +30,7 @@ import (
 	"github.com/Clawdlinux/agentgate/internal/delegation"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
 	"github.com/Clawdlinux/agentgate/internal/oauth"
+	"github.com/Clawdlinux/agentgate/internal/org"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
@@ -95,6 +96,11 @@ func main() {
 		logger.Error("bootstrap agent key", "error", err)
 		os.Exit(1)
 	}
+	orgStore := org.NewStore(database)
+	if err := bootstrapAdmin(context.Background(), orgStore, logger); err != nil {
+		logger.Error("bootstrap admin", "error", err)
+		os.Exit(1)
+	}
 
 	// Signer derives its own purpose-specific encryption key from
 	// masterKey — it never uses masterKey directly (internal/signer's own
@@ -148,7 +154,8 @@ func main() {
 	}
 
 	oauthHandler := oauth.NewCallbackHandler(oauthProviders, vaultStore, masterKey, publicURL, logger)
-	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, adminSecret, logger)
+	sessionManager := admin.NewSessionManager(masterKey, publicURL)
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, orgStore, sessionManager, adminSecret, logger)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", srv)
@@ -159,6 +166,9 @@ func main() {
 	mux.Handle("POST /admin/tokens", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ConnectBearerToken)))
 	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
 	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
+	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
+	mux.HandleFunc("POST /admin/login", adminHandler.Login)
+	mux.Handle("POST /admin/logout", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.Logout)))
 	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
 
 	// The dashboard is a static single-page app served same-origin so its
@@ -241,6 +251,26 @@ func bootstrapAgentKey(ctx context.Context, keyStore *auth.KeyStore, logger *slo
 	logger.Warn("bootstrapped a new agent API key — this is the only time it is shown; store it now",
 		"agent_key", plaintext,
 	)
+	return nil
+}
+
+func bootstrapAdmin(ctx context.Context, orgStore *org.Store, logger *slog.Logger) error {
+	email := strings.TrimSpace(os.Getenv("AGENTGATE_BOOTSTRAP_ADMIN_EMAIL"))
+	password := os.Getenv("AGENTGATE_BOOTSTRAP_ADMIN_PASSWORD")
+	if email == "" && password == "" {
+		return nil
+	}
+	if email == "" || password == "" {
+		return fmt.Errorf("AGENTGATE_BOOTSTRAP_ADMIN_EMAIL and AGENTGATE_BOOTSTRAP_ADMIN_PASSWORD must both be set")
+	}
+	organization, admin, created, err := orgStore.BootstrapAdmin(ctx, "Default organization", email, password)
+	if err != nil {
+		return err
+	}
+	if !created {
+		return nil
+	}
+	logger.Info("bootstrapped initial admin", "org_id", organization.ID, "admin_email", admin.Email)
 	return nil
 }
 

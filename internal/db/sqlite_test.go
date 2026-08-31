@@ -24,7 +24,7 @@ func TestRunMigrations_AppliesAllMigrationsCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, table := range []string{"agent_keys", "tokens", "audit_log", "signer_keys"} {
+	for _, table := range []string{"agent_keys", "tokens", "audit_log", "signer_keys", "orgs", "org_admins"} {
 		var count int
 		if err := database.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
 			t.Fatal(err)
