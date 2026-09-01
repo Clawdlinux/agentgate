@@ -7,6 +7,9 @@ services:
       - AGENTGATE_VAULT_KEY=dev-key-change-in-production-32b
       - AGENTGATE_ADMIN_SECRET=admin-dev-secret-change-me!!
       - AGENTGATE_PUBLIC_URL=http://localhost:8080
+      # Optional. Both values create the first admin account on an empty database. Remove them after first startup.
+      - AGENTGATE_BOOTSTRAP_ADMIN_EMAIL=${AGENTGATE_BOOTSTRAP_ADMIN_EMAIL:-}
+      - AGENTGATE_BOOTSTRAP_ADMIN_PASSWORD=${AGENTGATE_BOOTSTRAP_ADMIN_PASSWORD:-}
       # Agent API keys are bootstrapped automatically on first boot; see
       # the container logs for the one-time plaintext key.
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}

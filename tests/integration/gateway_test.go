@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/gateway"
 	"github.com/Clawdlinux/agentgate/internal/oauth"
+	"github.com/Clawdlinux/agentgate/internal/org"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
@@ -125,7 +127,15 @@ services:
 	}, vaultStore, masterKey, "http://localhost:8080", nil)
 
 	// Admin.
-	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, "admin-secret", nil)
+	orgStore := org.NewStore(database)
+	organization, err := orgStore.CreateOrg(t.Context(), "Example Inc.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orgStore.CreateAdmin(t.Context(), organization.ID, "admin@example.com", "correct horse battery staple"); err != nil {
+		t.Fatal(err)
+	}
+	adminHandler := admin.NewHandler(keyStore, oauthHandler, vaultStore, reg, orgStore, admin.NewSessionManager(masterKey, "http://localhost:8080"), "admin-secret", nil)
 
 	// Gateway — real dependencies throughout, matching production wiring.
 	gw := gateway.New(gateway.Config{
@@ -145,27 +155,15 @@ services:
 	mux.HandleFunc("GET /v1/receipts/pubkey", signer.PubkeyHandler(signerStore))
 
 	// Admin routes.
-	mux.HandleFunc("POST /admin/keys", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admin-Secret") != "admin-secret" {
-			w.WriteHeader(401)
-			return
-		}
-		adminHandler.CreateKey(w, r)
-	})
-	mux.HandleFunc("POST /admin/link", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admin-Secret") != "admin-secret" {
-			w.WriteHeader(401)
-			return
-		}
-		adminHandler.LinkAccount(w, r)
-	})
-	mux.HandleFunc("POST /admin/tokens", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admin-Secret") != "admin-secret" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		adminHandler.ConnectBearerToken(w, r)
-	})
+	mux.Handle("POST /admin/keys", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.CreateKey)))
+	mux.Handle("DELETE /admin/keys/{id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.RevokeKey)))
+	mux.Handle("POST /admin/link", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.LinkAccount)))
+	mux.Handle("POST /admin/tokens", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ConnectBearerToken)))
+	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
+	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
+	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
+	mux.HandleFunc("POST /admin/login", adminHandler.Login)
+	mux.HandleFunc("POST /admin/logout", adminHandler.Logout)
 
 	// OAuth callback.
 	mux.HandleFunc("GET /auth/callback/{service}", oauthHandler.ServeHTTP)
@@ -186,6 +184,68 @@ func TestIntegration_Healthz(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("healthz status = %d", resp.StatusCode)
 	}
+}
+
+func TestIntegration_AdminSessionAccessesProtectedRoutes(t *testing.T) {
+	ts, _, _ := setupIntegration(t, "")
+	form := url.Values{"email": {"admin@example.com"}, "password": {"correct horse battery staple"}}
+	loginRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/admin/login", bytes.NewBufferString(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	loginResponse, err := client.Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want %d", loginResponse.StatusCode, http.StatusSeeOther)
+	}
+	cookies := loginResponse.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("login cookies = %#v, want one session cookie", cookies)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "create key", method: http.MethodPost, path: "/admin/keys", body: `{"name":"session-agent"}`},
+		{name: "revoke key", method: http.MethodDelete, path: "/admin/keys/missing"},
+		{name: "start oauth link", method: http.MethodPost, path: "/admin/link", body: `{"user_id":"user-42","service":"github"}`},
+		{name: "connect bearer token", method: http.MethodPost, path: "/admin/tokens", body: `{"user_id":"user-42","service":"stripe","access_token":"test-token"}`},
+		{name: "list tokens", method: http.MethodGet, path: "/admin/tokens/user-42"},
+		{name: "export receipts", method: http.MethodGet, path: "/v1/receipts/export?from=1"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, ts.URL+test.path, bytes.NewBufferString(test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.AddCookie(cookies[0])
+			if isMutatingMethod(test.method) {
+				request.Header.Set("X-Requested-With", "AgentGate")
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode == http.StatusUnauthorized {
+				t.Fatalf("session request returned unauthorized")
+			}
+		})
+	}
+}
+
+func isMutatingMethod(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
 }
 
 func TestIntegration_ActUnauthorized(t *testing.T) {
