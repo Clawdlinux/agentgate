@@ -4,8 +4,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AGENTGATE_VAULT_KEY=dev-key-change-in-production-32b
-      - AGENTGATE_ADMIN_SECRET=admin-dev-secret-change-me!!
+      - AGENTGATE_VAULT_KEY=${AGENTGATE_VAULT_KEY:?set a 32-byte vault key in .env}
+      - AGENTGATE_ADMIN_SECRET=${AGENTGATE_ADMIN_SECRET:?set an admin secret in .env}
       - AGENTGATE_PUBLIC_URL=http://localhost:8080
       # Optional. Both values create the first admin account on an empty database. Remove them after first startup.
       - AGENTGATE_BOOTSTRAP_ADMIN_EMAIL=${AGENTGATE_BOOTSTRAP_ADMIN_EMAIL:-}

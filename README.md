@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Clawdlinux/agentgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Clawdlinux/agentgate/actions/workflows/ci.yml)
 
-A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Google Workspace) on behalf of users. Agents never see tokens — the gateway handles OAuth, encrypted token storage, and request proxying. Every action gets a signed, gap-free receipt that anyone can verify offline, without AgentGate's secret key.
+A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Google Workspace) on behalf of users. Agents never see tokens. The gateway handles OAuth, encrypted token storage, and request proxying. Recorded actions get signed receipts that anyone can verify offline, without AgentGate's secret key.
 
 ## Quickstart
 
@@ -10,14 +10,19 @@ A thin API gateway that lets AI agents call SaaS APIs (GitHub, Slack, Google Wor
 image published to GHCR on every tagged release:
 
 ```bash
+umask 077
+printf 'AGENTGATE_VAULT_KEY=%s\nAGENTGATE_ADMIN_SECRET=%s\n' \
+  "$(openssl rand -base64 24)" "$(openssl rand -base64 32)" > .env
 mkdir -p data
 docker run -d --name agentgate \
   -p 8080:8080 \
-  -e AGENTGATE_VAULT_KEY=dev-key-change-in-production-32b \
-  -e AGENTGATE_ADMIN_SECRET=admin-dev-secret-change-me!! \
+  --env-file .env \
   -v $(pwd)/data:/data \
   ghcr.io/clawdlinux/agentgate:latest
 ```
+
+Keep `.env` private. Keep it when you recreate the container. The vault cannot
+decrypt existing records without the same key.
 
 It bootstraps one agent API key on first boot and logs it once:
 
