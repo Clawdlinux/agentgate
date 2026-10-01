@@ -263,6 +263,10 @@ if sdk.IsRateLimited(err) {
 }
 ```
 
+## Invariant layer inside Clawdlinux
+
+AgentGate is deterministic. Agents never see tokens, calls go only to configured services, and every action attempt commits a signed receipt. Clawdlinux treats rules like these as its invariant layer, which no model can override. AgentGate makes no decision-model claims. See the [decision architecture](https://github.com/Clawdlinux/agentic-operator-core/blob/main/docs/architecture/decision-architecture.md).
+
 ## Security Model
 
 1. **Agent keys** are scoped (service × user). Agents can only access what's explicitly granted.
