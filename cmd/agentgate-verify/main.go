@@ -27,10 +27,9 @@ Licensed under the Apache License, Version 2.0.
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,6 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/Clawdlinux/agentgate/internal/receipt"
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
 
 func main() {
@@ -80,23 +80,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var explicitTrust []receipt.TrustedKey
+	var explicitTrust []receiptspec.TrustedKey
 	if trustRoot != "" {
 		trustData, err := os.ReadFile(trustRoot)
 		if err != nil {
 			fmt.Fprintf(stderr, "agentgate-verify: read trust root: %v\n", err)
 			return 2
 		}
-		explicitTrust, err = receipt.LoadTrustedKeys(trustData)
+		explicitTrust, err = receiptspec.LoadTrustedKeys(trustData)
 		if err != nil {
 			fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 			return 2
 		}
 	}
 
-	var explicitExpected *receipt.ExpectedHead
+	var explicitExpected *receiptspec.ExpectedHead
 	if expectedHead != "" {
-		eh, err := receipt.ParseExpectedHead(expectedHead)
+		eh, err := receiptspec.ParseExpectedHead(expectedHead)
 		if err != nil {
 			fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 			return 2
@@ -105,45 +105,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var (
-		receipts     []receipt.Receipt
-		embeddedKeys []receipt.TrustedKey
-		manifest     *receipt.ExportManifest
-		err          error
+		bundle receiptspec.Bundle
+		err    error
 	)
 	switch source {
 	case "sqlite":
-		receipts, err = readSQLite(path)
+		bundle.Receipts, err = readSQLite(path)
 	case "jsonl":
-		receipts, embeddedKeys, manifest, err = readJSONL(path)
+		bundle, err = readJSONL(path)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "agentgate-verify: read %s: %v\n", source, err)
 		return 2
 	}
-
-	trustedKeys := explicitTrust
-	if len(trustedKeys) == 0 {
-		if len(embeddedKeys) == 0 {
-			fmt.Fprintln(stderr, "agentgate-verify: --trust-root is required (the source has no embedded keys)")
-			return 2
-		}
-		trustedKeys = embeddedKeys
+	if len(explicitTrust) == 0 && len(bundle.Keys) == 0 {
+		fmt.Fprintln(stderr, "agentgate-verify: --trust-root is required (the source has no embedded keys)")
+		return 2
 	}
+	manifest := bundle.Manifest
 
-	anchor := receipt.Anchor{}
-	expected := explicitExpected
-	if manifest != nil {
-		if err := receipt.VerifyManifest(*manifest, trustedKeys, embeddedKeys); err != nil {
-			fmt.Fprintf(stderr, "agentgate-verify: manifest: %v\n", err)
-			return 1
-		}
-		anchor = receipt.Anchor{Seq: manifest.AnchorSeq, EntryHash: manifest.AnchorHash}
-		if expected == nil {
-			expected = &receipt.ExpectedHead{Seq: manifest.ResolvedTo, EntryHash: manifest.LastEntryHash}
-		}
+	result, err := receiptspec.VerifyBundle(bundle, explicitTrust, explicitExpected)
+	var manifestErr *receiptspec.ManifestError
+	if errors.As(err, &manifestErr) {
+		fmt.Fprintf(stderr, "agentgate-verify: manifest: %v\n", manifestErr.Err)
+		return 1
 	}
-
-	result, err := receipt.VerifyChain(receipts, trustedKeys, anchor, expected)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentgate-verify: %v\n", err)
 		return 2
@@ -203,7 +189,7 @@ type jsonResult struct {
 	Range         string `json:"range,omitempty"`
 }
 
-func writeJSONResult(stdout io.Writer, result receipt.VerifyResult, rangeKind string) {
+func writeJSONResult(stdout io.Writer, result receiptspec.VerifyResult, rangeKind string) {
 	output := jsonResult{
 		OK:            result.OK,
 		TotalReceipts: result.TotalReceipts,
@@ -222,7 +208,7 @@ func writeJSONResult(stdout io.Writer, result receipt.VerifyResult, rangeKind st
 
 // readSQLite reads every row of the receipts table, ordered by seq, from a
 // local file. It never writes to the database.
-func readSQLite(path string) ([]receipt.Receipt, error) {
+func readSQLite(path string) ([]receiptspec.Receipt, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -239,7 +225,7 @@ func readSQLite(path string) ([]receipt.Receipt, error) {
 	}
 	defer rows.Close()
 
-	var out []receipt.Receipt
+	var out []receiptspec.Receipt
 	for rows.Next() {
 		r, err := receipt.ScanReceiptRow(rows)
 		if err != nil {
@@ -250,57 +236,15 @@ func readSQLite(path string) ([]receipt.Receipt, error) {
 	return out, rows.Err()
 }
 
-// readJSONL reads path (or stdin when path is "-"), dispatching each
-// non-empty line by its "type" field: "key" lines accumulate into
-// embeddedKeys, a "manifest" line becomes manifest (at most one is
-// expected; a later one overwrites, since a well-formed export has
-// exactly one), and everything else ("receipt", or no "type" field at
-// all — Phase 5's original plain format) accumulates into receipts.
-func readJSONL(path string) (receipts []receipt.Receipt, embeddedKeys []receipt.TrustedKey, manifest *receipt.ExportManifest, err error) {
-	var rdr io.Reader
+// readJSONL reads path (or stdin when path is "-") with receiptspec.ReadJSONL.
+func readJSONL(path string) (receiptspec.Bundle, error) {
 	if path == "-" {
-		rdr = os.Stdin
-	} else {
-		f, ferr := os.Open(path)
-		if ferr != nil {
-			return nil, nil, nil, ferr
-		}
-		defer f.Close()
-		rdr = f
+		return receiptspec.ReadJSONL(os.Stdin)
 	}
-
-	scanner := bufio.NewScanner(rdr)
-	scanner.Buffer(make([]byte, 1<<20), 1<<24)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		switch receipt.DetectJSONLLineType(line) {
-		case "manifest":
-			m, perr := receipt.ParseManifestLine(line)
-			if perr != nil {
-				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
-			}
-			manifest = &m
-		case "key":
-			k, perr := receipt.ParseKeyLine(line)
-			if perr != nil {
-				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
-			}
-			embeddedKeys = append(embeddedKeys, k)
-		default:
-			r, perr := receipt.ParseJSONLReceipt(line)
-			if perr != nil {
-				return nil, nil, nil, fmt.Errorf("line %d: %w", lineNum, perr)
-			}
-			receipts = append(receipts, r)
-		}
+	f, err := os.Open(path)
+	if err != nil {
+		return receiptspec.Bundle{}, err
 	}
-	if serr := scanner.Err(); serr != nil {
-		return nil, nil, nil, serr
-	}
-	return receipts, embeddedKeys, manifest, nil
+	defer f.Close()
+	return receiptspec.ReadJSONL(f)
 }
