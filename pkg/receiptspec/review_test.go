@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package receiptspec_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -75,7 +76,7 @@ func TestVerifyManifestRejectsMalformedPublicKey(t *testing.T) {
 
 func TestCanonicalRecordRejectsOversizedInput(t *testing.T) {
 	big := `{"a":"` + strings.Repeat("x", 1<<20) + `"}`
-	if _, err := receiptspec.CanonicalRecord([]byte(big)); !errors.Is(err, receiptspec.ErrInvalidRecord) {
+	if _, err := receiptspec.CanonicalRecord(json.RawMessage(big)); !errors.Is(err, receiptspec.ErrInvalidRecord) {
 		t.Fatalf("got %v, want ErrInvalidRecord", err)
 	}
 }
