@@ -10,10 +10,10 @@ package signer
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"time"
+
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
 
 // ErrKeyUnreadable is returned when persisted key material exists but
@@ -30,6 +30,7 @@ var ErrNoActiveKey = errors.New("signer: no active key")
 // not strictly exceed the current active key's starting sequence.
 var ErrRotationSequence = errors.New("signer: rotation sequence must exceed the active key's valid_from_seq")
 
+// kidPrefix is the prefix receiptspec.ComputeKID puts on every key ID.
 const kidPrefix = "ed25519:"
 
 // KeyRecord describes one signing key's public identity and validity
@@ -47,8 +48,7 @@ type KeyRecord struct {
 // to the public key bytes, so any holder of the public key can reproduce it
 // without gateway state.
 func ComputeKID(pub ed25519.PublicKey) string {
-	digest := sha256.Sum256(pub)
-	return kidPrefix + hex.EncodeToString(digest[:8])
+	return receiptspec.ComputeKID(pub)
 }
 
 // Sign returns the Ed25519 signature of message under priv.

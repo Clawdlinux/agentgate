@@ -7,6 +7,7 @@ package receipt
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/signer"
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
 
 // ErrLedgerAppend wraps every failure returned by Ledger.Append. Callers
@@ -108,8 +110,8 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 		return Receipt{}, fmt.Errorf("%w: signer key: %v", ErrLedgerAppend, err)
 	}
 
-	r := Receipt{
-		Seq:             head + 1,
+	chain := receiptspec.NewChain(storeSigner{kid: keyRecord.KID, priv: priv}, head, prevHash)
+	r, err := chain.Next(receiptspec.Fields{
 		TimestampUnixNS: uint64(l.nowFn().UnixNano()),
 		HumanPrincipal:  draft.HumanPrincipal,
 		AgentKeyID:      draft.AgentKeyID,
@@ -121,16 +123,10 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 		StatusCode:      draft.StatusCode,
 		LatencyMS:       draft.LatencyMS,
 		Error:           draft.Error,
-		PrevHash:        prevHash,
-		SignerKID:       keyRecord.KID,
-	}
-
-	entryHash, err := ComputeEntryHash(r)
+	})
 	if err != nil {
 		return Receipt{}, fmt.Errorf("%w: compute hash: %v", ErrLedgerAppend, err)
 	}
-	r.EntryHash = entryHash
-	r.Signature = signer.Sign(priv, entryHash[:])
 
 	if err := insertReceipt(ctx, conn, r); err != nil {
 		return Receipt{}, fmt.Errorf("%w: insert: %v", ErrLedgerAppend, err)
@@ -141,6 +137,19 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 	}
 	committed = true
 	return r, nil
+}
+
+// storeSigner signs with the signer store's active key under its stored KID.
+type storeSigner struct {
+	kid  string
+	priv ed25519.PrivateKey
+}
+
+func (s storeSigner) KID() string { return s.kid }
+
+func (s storeSigner) Sign(msg []byte) ([]byte, error) {
+	sig := signer.Sign(s.priv, msg)
+	return sig[:], nil
 }
 
 // headReader is satisfied by both *sql.DB and *sql.Conn, so readHead can

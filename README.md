@@ -85,6 +85,17 @@ integrity. For scripts, add `--format json` to receive one machine-readable
 result object while keeping the same exit codes. Add `--quiet` (or `-q`) to
 text output to print only the `PASS:` summary on successful verification.
 
+### Verify receipts from other producers
+
+The receipt protocol lives in a public, standard-library-only Go package:
+[`pkg/receiptspec`](pkg/receiptspec). It holds the receipt type, canonical
+hashing, Ed25519 signing, chain and export verification, and JSONL encoding.
+The gateway and `agentgate-verify` both use it, so there is one
+implementation. Another producer, such as the Clawdlinux operator, builds a
+chain with `receiptspec.NewChain` and any `agentgate-verify` checks it with
+`--source jsonl`. To record decisions instead of API calls, see
+[`pkg/receiptspec/DECISION.md`](pkg/receiptspec/DECISION.md).
+
 ### Development option
 
 To build from source instead of pulling the release image — useful when
