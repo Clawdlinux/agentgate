@@ -1,3 +1,5 @@
+See [decision-architecture.md](https://github.com/Clawdlinux/agentic-operator-core/blob/main/docs/architecture/decision-architecture.md) (Clawdlinux ADR) for decision layers.
+
 # Roadmap: AgentGate Receipts and OSS Launch
 
 ## Overview

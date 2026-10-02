@@ -1,3 +1,6 @@
+Status: archived. Early overnight-build planning doc. It may not match the current code.
+See [decision-architecture.md](https://github.com/Clawdlinux/agentic-operator-core/blob/main/docs/architecture/decision-architecture.md) (Clawdlinux ADR) for decision layers.
+
 # AgentGate — Architecture Design Document
 
 ## 1. Product Summary
