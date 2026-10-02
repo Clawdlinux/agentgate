@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // ErrSignature means a signer returned a malformed signature or a receipt
@@ -53,6 +54,7 @@ func (s ed25519Signer) Sign(msg []byte) ([]byte, error) { return ed25519.Sign(s.
 // Seal sets SignerKID from s, computes EntryHash, and signs it.
 // Seq, PrevHash, and every other field must already be set.
 func Seal(r Receipt, s Signer) (Receipt, error) {
+	r.DelegationChain = slices.Clone(r.DelegationChain)
 	r.SignerKID = s.KID()
 	hash, err := ComputeEntryHash(r)
 	if err != nil {

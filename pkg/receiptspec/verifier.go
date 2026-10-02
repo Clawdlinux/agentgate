@@ -196,7 +196,7 @@ func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, anchor Anchor, ex
 			result.Reason = ReasonEntryHashMismatch
 			return result, nil
 		}
-		if !ed25519.Verify(key.PublicKey, entryHash[:], r.Signature[:]) {
+		if len(key.PublicKey) != ed25519.PublicKeySize || !ed25519.Verify(key.PublicKey, entryHash[:], r.Signature[:]) {
 			result.FailedAtSeq = r.Seq
 			result.Reason = ReasonSignatureInvalid
 			return result, nil

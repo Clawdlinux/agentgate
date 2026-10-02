@@ -124,6 +124,9 @@ func VerifyManifest(m ExportManifest, trustedKeys []TrustedKey, embeddedKeys []T
 	if !found {
 		return fmt.Errorf("%w: %s", ErrUnknownSignerKID, m.SignerKID)
 	}
+	if len(key.PublicKey) != ed25519.PublicKeySize {
+		return ErrManifestSignatureInvalid
+	}
 	hash := ComputeManifestHash(m)
 	if !ed25519.Verify(key.PublicKey, hash[:], m.Signature[:]) {
 		return ErrManifestSignatureInvalid

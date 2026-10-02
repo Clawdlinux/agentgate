@@ -52,6 +52,11 @@ func CanonicalRecord(v any) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
 		}
 	}
+	// Canonical output is never longer than the raw input, so bounding the
+	// input bounds decode, copy, and sort work before any of it happens.
+	if len(raw) > maxRecordBytes {
+		return nil, ErrInvalidRecord
+	}
 	if !utf8.Valid(raw) || !validSurrogateEscapes(raw) {
 		return nil, ErrInvalidRecord
 	}
