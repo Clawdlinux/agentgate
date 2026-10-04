@@ -132,13 +132,9 @@ func (c *Client) Act(ctx context.Context, req ActRequest) (*ActResponse, error) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
+	respBody, err := readResponseBody(resp)
 	if err != nil {
-		return nil, fmt.Errorf("sdk.Act: read response: %w", err)
-	}
-	if len(respBody) > maxResponseBodyBytes {
-		limitErr := fmt.Errorf("response status %d exceeds %d-byte limit", resp.StatusCode, maxResponseBodyBytes)
-		return nil, fmt.Errorf("sdk.Act: %w", limitErr)
+		return nil, fmt.Errorf("sdk.Act: %w", err)
 	}
 
 	var actResp ActResponse
@@ -155,17 +151,28 @@ func (c *Client) Act(ctx context.Context, req ActRequest) (*ActResponse, error) 
 		return nil, &AgentGateError{
 			Status:  resp.StatusCode,
 			Code:    actResp.Code,
-			Message: actResp.Error,
+			Message: sanitizedSnippet([]byte(actResp.Error)),
 		}
 	}
 
 	return &actResp, nil
 }
 
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxResponseBodyBytes {
+		return nil, fmt.Errorf("response status %d exceeds %d-byte limit", resp.StatusCode, maxResponseBodyBytes)
+	}
+	return body, nil
+}
+
 func sanitizedSnippet(body []byte) string {
 	var snippet strings.Builder
 	for _, char := range string(body) {
-		if unicode.IsControl(char) {
+		if unicode.IsControl(char) || unicode.Is(unicode.Cf, char) {
 			continue
 		}
 		charBytes := utf8.RuneLen(char)
@@ -198,19 +205,23 @@ func (c *Client) Healthz(ctx context.Context) error {
 func (c *Client) ListServices(ctx context.Context) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1/services", nil)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: list services: %w", err)
+		return nil, fmt.Errorf("sdk.ListServices: create request: %w", err)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: list services: %w", err)
+		return nil, fmt.Errorf("sdk.ListServices: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	respBody, err := readResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("sdk.ListServices: %w", err)
+	}
 
 	var result struct {
 		Services []string `json:"services"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("agentgate: parse services: %w", err)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("sdk.ListServices: parse response: %w", err)
 	}
 	return result.Services, nil
 }

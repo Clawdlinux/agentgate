@@ -3,10 +3,13 @@ package sdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClient_Act_RedirectPolicy(t *testing.T) {
@@ -221,6 +224,187 @@ func TestClient_Act_NonJSONErrorBodyIsSanitizedAndTruncated(t *testing.T) {
 	}
 }
 
+func TestClient_Act_GatewayErrorIsSanitizedAndTruncated(t *testing.T) {
+	tests := []struct {
+		name         string
+		gatewayError string
+		wantMessage  string
+	}{
+		{
+			name:         "control characters and byte limit",
+			gatewayError: "unsafe\x1b\n" + strings.Repeat("x", 5000),
+			wantMessage:  "unsafe" + strings.Repeat("x", maxErrorSnippetBytes-len("unsafe")),
+		},
+		{
+			name:         "Unicode bidi format characters",
+			gatewayError: "safe\u202Ehidden\u2066text",
+			wantMessage:  "safehiddentext",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadGateway)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": test.gatewayError,
+					"code":  "upstream_error",
+				})
+			}))
+			defer mockGateway.Close()
+
+			client := NewClient(mockGateway.URL, "key")
+			_, err := client.Act(context.Background(), ActRequest{})
+			var agentGateErr *AgentGateError
+			if !errors.As(err, &agentGateErr) {
+				t.Fatalf("Act() error = %v, want *AgentGateError", err)
+			}
+			if agentGateErr.Message != test.wantMessage {
+				t.Fatalf("AgentGateError.Message = %q, want %q", agentGateErr.Message, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestClient_ListServices_ResponseBodyLimit(t *testing.T) {
+	const prefix = `{"services":["`
+	const suffix = `"]}`
+
+	tests := []struct {
+		name      string
+		bodySize  int
+		wantError string
+	}{
+		{name: "exact limit accepted", bodySize: maxResponseBodyBytes},
+		{name: "over limit rejected", bodySize: maxResponseBodyBytes + 1, wantError: "response status 200 exceeds 10485760-byte limit"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(prefix + strings.Repeat("x", test.bodySize-len(prefix)-len(suffix)) + suffix))
+			}))
+			defer mockGateway.Close()
+
+			client := NewClient(mockGateway.URL, "key")
+			services, err := client.ListServices(context.Background())
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("ListServices() error = %v, want substring %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListServices() error = %v", err)
+			}
+			if len(services) != 1 || len(services[0]) != test.bodySize-len(prefix)-len(suffix) {
+				t.Fatalf("ListServices() service lengths = %v", len(services))
+			}
+		})
+	}
+}
+
+func TestClient_ResponseBodyLimit_RejectsEndlessStreamPromptly(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{
+			name: "Act",
+			call: func(client *Client) error {
+				_, err := client.Act(context.Background(), ActRequest{})
+				return err
+			},
+		},
+		{
+			name: "ListServices",
+			call: func(client *Client) error {
+				_, err := client.ListServices(context.Background())
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := &endlessReader{}
+			httpClient := &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(body),
+						Request:    req,
+					}, nil
+				}),
+			}
+			client := NewClient("http://agentgate.test", "key", WithHTTPClient(httpClient))
+
+			started := time.Now()
+			err := test.call(client)
+			elapsed := time.Since(started)
+			if err == nil || !strings.Contains(err.Error(), "exceeds 10485760-byte limit") {
+				t.Fatalf("call() error = %v, want response limit error", err)
+			}
+			if body.bytesRead != maxResponseBodyBytes+1 {
+				t.Fatalf("response bytes read = %d, want %d", body.bytesRead, maxResponseBodyBytes+1)
+			}
+			if elapsed >= 2*time.Second {
+				t.Fatalf("call() took %s, want under 2s", elapsed)
+			}
+		})
+	}
+}
+
+func TestClient_RedirectPolicy_ChainsCallerPolicy(t *testing.T) {
+	callerErr := errors.New("caller redirect policy refused")
+	tests := []struct {
+		name      string
+		policyErr error
+		wantError string
+	}{
+		{name: "caller allows redirect"},
+		{name: "caller rejects redirect", policyErr: callerErr, wantError: callerErr.Error()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policyCalled := false
+			var mockGateway *httptest.Server
+			mockGateway = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/act" {
+					http.Redirect(w, r, mockGateway.URL+"/redirected", http.StatusTemporaryRedirect)
+					return
+				}
+				json.NewEncoder(w).Encode(ActResponse{Status: http.StatusOK})
+			}))
+			defer mockGateway.Close()
+
+			httpClient := mockGateway.Client()
+			httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				policyCalled = true
+				return test.policyErr
+			}
+			client := NewClient(mockGateway.URL, "key", WithHTTPClient(httpClient))
+			_, err := client.Act(context.Background(), ActRequest{})
+			if !policyCalled {
+				t.Fatal("caller CheckRedirect was not called")
+			}
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("Act() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Act() error = %v, want substring %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestClient_Act_Success(t *testing.T) {
 	t.Parallel()
 
@@ -380,4 +564,25 @@ func TestErrorHelpers(t *testing.T) {
 			}
 		})
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type endlessReader struct {
+	bytesRead int
+}
+
+func (reader *endlessReader) Read(buffer []byte) (int, error) {
+	if reader.bytesRead >= maxResponseBodyBytes+1 {
+		select {}
+	}
+	for index := range buffer {
+		buffer[index] = 'x'
+	}
+	reader.bytesRead += len(buffer)
+	return len(buffer), nil
 }
