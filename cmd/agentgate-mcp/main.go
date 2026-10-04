@@ -49,10 +49,10 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 	scanner.Buffer(make([]byte, 4096), 10<<20)
 	encoder := json.NewEncoder(output)
 	for scanner.Scan() {
-		var req request
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": -32700, "message": "Parse error"}}); err != nil {
-				return err
+		req, envelopeError := parseRequest(scanner.Bytes())
+		if envelopeError != nil {
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": envelopeError}); err != nil {
+				return fmt.Errorf("agentgate-mcp.serve: %w", err)
 			}
 			continue
 		}
@@ -62,9 +62,11 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 		var result any
 		var rpcError any
 		switch {
-		case req.JSONRPC != "2.0":
-			rpcError = map[string]any{"code": -32600, "message": "Invalid request"}
 		case req.Method == "initialize":
+			if !validInitializeParams(req.Params) {
+				rpcError = map[string]any{"code": -32602, "message": "Invalid params"}
+				break
+			}
 			result = map[string]any{
 				"protocolVersion": protocolVersion,
 				"capabilities":    map[string]any{"tools": map[string]any{}},
@@ -106,7 +108,7 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 			}
 			body, err := json.Marshal(response)
 			if err != nil {
-				return fmt.Errorf("encode gateway response: %w", err)
+				return fmt.Errorf("agentgate-mcp.serve: %w", err)
 			}
 			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": string(body)}}, "isError": response.Status >= 400}
 		default:
@@ -119,8 +121,62 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 			message["result"] = result
 		}
 		if err := encoder.Encode(message); err != nil {
-			return fmt.Errorf("write MCP response: %w", err)
+			return fmt.Errorf("agentgate-mcp.serve: %w", err)
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("agentgate-mcp.serve: %w", err)
+	}
+	return nil
+}
+
+// parseRequest validates the JSON-RPC 2.0 envelope. On error, req.ID holds the echoable id or nil.
+func parseRequest(line []byte) (request, map[string]any) {
+	if !json.Valid(line) {
+		return request{}, map[string]any{"code": -32700, "message": "Parse error"}
+	}
+	invalid := map[string]any{"code": -32600, "message": "Invalid Request"}
+	var fields map[string]json.RawMessage
+	if !isJSONKind(line, '{') || json.Unmarshal(line, &fields) != nil {
+		return request{}, invalid
+	}
+	var req request
+	if id, ok := fields["id"]; ok {
+		if !validID(id) {
+			return request{}, invalid
+		}
+		req.ID = id
+	}
+	if json.Unmarshal(fields["jsonrpc"], &req.JSONRPC) != nil || req.JSONRPC != "2.0" ||
+		json.Unmarshal(fields["method"], &req.Method) != nil || req.Method == "" {
+		return request{ID: req.ID}, invalid
+	}
+	req.Params = fields["params"]
+	return req, nil
+}
+
+func validID(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	switch c := trimmed[0]; {
+	case c == '"', c == 'n', c == '-', c >= '0' && c <= '9':
+		return true
+	}
+	return false
+}
+
+func validInitializeParams(raw json.RawMessage) bool {
+	var params map[string]json.RawMessage
+	if !isJSONKind(raw, '{') || json.Unmarshal(raw, &params) != nil {
+		return false
+	}
+	return isJSONKind(params["protocolVersion"], '"')
+}
+
+// isJSONKind reports whether already-valid JSON starts with the given byte.
+func isJSONKind(raw []byte, first byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == first
 }
