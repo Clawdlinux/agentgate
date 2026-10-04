@@ -4,11 +4,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
+
+const (
+	maxRedirectHops      = 3
+	maxResponseBodyBytes = 10 << 20
+	maxErrorSnippetBytes = 200
+)
+
+type redirectPolicyError string
+
+func (e redirectPolicyError) Error() string { return string(e) }
 
 // Client is the AgentGate SDK client for agents.
 type Client struct {
@@ -42,7 +56,30 @@ func NewClient(baseURL, apiKey string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	httpClient := *c.httpClient
+	httpClient.CheckRedirect = secureRedirectPolicy(httpClient.CheckRedirect)
+	c.httpClient = &httpClient
 	return c
+}
+
+func secureRedirectPolicy(previousPolicy func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) > maxRedirectHops {
+			return redirectPolicyError("more than 3 redirects refused")
+		}
+
+		originalURL := via[0].URL
+		if originalURL.Scheme == "https" && req.URL.Scheme == "http" {
+			return redirectPolicyError("HTTPS to HTTP redirect refused")
+		}
+		if !strings.EqualFold(originalURL.Host, req.URL.Host) {
+			return redirectPolicyError("cross-host redirect refused")
+		}
+		if previousPolicy != nil {
+			return previousPolicy(req, via)
+		}
+		return nil
+	}
 }
 
 // ActRequest is the request payload for POST /v1/act.
@@ -75,34 +112,37 @@ type Meta struct {
 func (c *Client) Act(ctx context.Context, req ActRequest) (*ActResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: marshal request: %w", err)
+		return nil, fmt.Errorf("sdk.Act: marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/act", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: create request: %w", err)
+		return nil, fmt.Errorf("sdk.Act: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: request failed: %w", err)
+		var redirectErr redirectPolicyError
+		if errors.As(err, &redirectErr) {
+			return nil, fmt.Errorf("sdk.Act: %w", redirectErr)
+		}
+		return nil, fmt.Errorf("sdk.Act: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB limit
+	respBody, err := readResponseBody(resp)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: read response: %w", err)
+		return nil, fmt.Errorf("sdk.Act: %w", err)
 	}
 
 	var actResp ActResponse
 	if err := json.Unmarshal(respBody, &actResp); err != nil {
-		// If we can't parse the response, wrap the raw body.
 		return nil, &AgentGateError{
 			Status:  resp.StatusCode,
 			Code:    "parse_error",
-			Message: fmt.Sprintf("failed to parse response: %s", string(respBody)),
+			Message: fmt.Sprintf("failed to parse response: %s", sanitizedSnippet(respBody)),
 		}
 	}
 
@@ -111,11 +151,37 @@ func (c *Client) Act(ctx context.Context, req ActRequest) (*ActResponse, error) 
 		return nil, &AgentGateError{
 			Status:  resp.StatusCode,
 			Code:    actResp.Code,
-			Message: actResp.Error,
+			Message: sanitizedSnippet([]byte(actResp.Error)),
 		}
 	}
 
 	return &actResp, nil
+}
+
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxResponseBodyBytes {
+		return nil, fmt.Errorf("response status %d exceeds %d-byte limit", resp.StatusCode, maxResponseBodyBytes)
+	}
+	return body, nil
+}
+
+func sanitizedSnippet(body []byte) string {
+	var snippet strings.Builder
+	for _, char := range string(body) {
+		if unicode.IsControl(char) || unicode.Is(unicode.Cf, char) {
+			continue
+		}
+		charBytes := utf8.RuneLen(char)
+		if charBytes < 0 || snippet.Len()+charBytes > maxErrorSnippetBytes {
+			break
+		}
+		snippet.WriteRune(char)
+	}
+	return snippet.String()
 }
 
 // Healthz checks if the gateway is healthy.
@@ -139,19 +205,23 @@ func (c *Client) Healthz(ctx context.Context) error {
 func (c *Client) ListServices(ctx context.Context) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/v1/services", nil)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: list services: %w", err)
+		return nil, fmt.Errorf("sdk.ListServices: create request: %w", err)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("agentgate: list services: %w", err)
+		return nil, fmt.Errorf("sdk.ListServices: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	respBody, err := readResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("sdk.ListServices: %w", err)
+	}
 
 	var result struct {
 		Services []string `json:"services"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("agentgate: parse services: %w", err)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("sdk.ListServices: parse response: %w", err)
 	}
 	return result.Services, nil
 }
