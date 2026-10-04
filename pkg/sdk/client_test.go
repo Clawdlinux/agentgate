@@ -5,8 +5,221 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestClient_Act_RedirectPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T) (string, *http.Client, <-chan http.Header)
+		wantError string
+	}{
+		{
+			name: "https downgrade blocked",
+			setup: func(t *testing.T) (string, *http.Client, <-chan http.Header) {
+				received := make(chan http.Header, 1)
+				destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					received <- r.Header.Clone()
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				t.Cleanup(destination.Close)
+
+				source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+				}))
+				t.Cleanup(source.Close)
+				return source.URL, source.Client(), received
+			},
+			wantError: "HTTPS to HTTP redirect refused",
+		},
+		{
+			name: "cross host blocked",
+			setup: func(t *testing.T) (string, *http.Client, <-chan http.Header) {
+				received := make(chan http.Header, 1)
+				destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					received <- r.Header.Clone()
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				t.Cleanup(destination.Close)
+
+				source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+				}))
+				t.Cleanup(source.Close)
+				return source.URL, source.Client(), received
+			},
+			wantError: "cross-host redirect refused",
+		},
+		{
+			name: "same origin allowed",
+			setup: func(t *testing.T) (string, *http.Client, <-chan http.Header) {
+				received := make(chan http.Header, 1)
+				var source *httptest.Server
+				source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/v1/act" {
+						http.Redirect(w, r, source.URL+"/redirected", http.StatusTemporaryRedirect)
+						return
+					}
+					received <- r.Header.Clone()
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(ActResponse{Status: http.StatusOK})
+				}))
+				t.Cleanup(source.Close)
+				return source.URL, source.Client(), received
+			},
+		},
+		{
+			name: "three hops allowed",
+			setup: func(t *testing.T) (string, *http.Client, <-chan http.Header) {
+				received := make(chan http.Header, 1)
+				var source *httptest.Server
+				source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/v1/act":
+						http.Redirect(w, r, source.URL+"/hop-1", http.StatusTemporaryRedirect)
+					case "/hop-1":
+						http.Redirect(w, r, source.URL+"/hop-2", http.StatusTemporaryRedirect)
+					case "/hop-2":
+						http.Redirect(w, r, source.URL+"/hop-3", http.StatusTemporaryRedirect)
+					default:
+						received <- r.Header.Clone()
+						w.Header().Set("Content-Type", "application/json")
+						json.NewEncoder(w).Encode(ActResponse{Status: http.StatusOK})
+					}
+				}))
+				t.Cleanup(source.Close)
+				return source.URL, source.Client(), received
+			},
+		},
+		{
+			name: "fourth hop blocked",
+			setup: func(t *testing.T) (string, *http.Client, <-chan http.Header) {
+				received := make(chan http.Header, 1)
+				var source *httptest.Server
+				source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/v1/act":
+						http.Redirect(w, r, source.URL+"/hop-1", http.StatusTemporaryRedirect)
+					case "/hop-1":
+						http.Redirect(w, r, source.URL+"/hop-2", http.StatusTemporaryRedirect)
+					case "/hop-2":
+						http.Redirect(w, r, source.URL+"/hop-3", http.StatusTemporaryRedirect)
+					case "/hop-3":
+						http.Redirect(w, r, source.URL+"/hop-4", http.StatusTemporaryRedirect)
+					default:
+						received <- r.Header.Clone()
+						w.WriteHeader(http.StatusNoContent)
+					}
+				}))
+				t.Cleanup(source.Close)
+				return source.URL, source.Client(), received
+			},
+			wantError: "more than 3 redirects refused",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseURL, httpClient, received := test.setup(t)
+			client := NewClient(baseURL, "redirect-secret", WithHTTPClient(httpClient))
+			_, err := client.Act(context.Background(), ActRequest{Service: "github", Action: "list_repos"})
+
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("Act() error = %v", err)
+				}
+				select {
+				case headers := <-received:
+					if got := headers.Get("Authorization"); got != "Bearer redirect-secret" {
+						t.Fatalf("Authorization = %q", got)
+					}
+				default:
+					t.Fatal("same-origin redirect did not reach destination")
+				}
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Act() error = %v, want substring %q", err, test.wantError)
+			}
+			if strings.Contains(err.Error(), "redirect-secret") {
+				t.Fatalf("Act() error exposed API key: %v", err)
+			}
+			select {
+			case headers := <-received:
+				t.Fatalf("blocked redirect reached destination with headers: %v", headers)
+			default:
+			}
+		})
+	}
+}
+
+func TestClient_Act_ResponseBodyLimit(t *testing.T) {
+	const prefix = `{"status":200,"body_text":"`
+	const suffix = `"}`
+
+	tests := []struct {
+		name      string
+		bodySize  int
+		wantError string
+	}{
+		{name: "exact limit accepted", bodySize: maxResponseBodyBytes},
+		{name: "over limit rejected", bodySize: maxResponseBodyBytes + 1, wantError: "response status 200 exceeds 10485760-byte limit"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(prefix + strings.Repeat("x", test.bodySize-len(prefix)-len(suffix)) + suffix))
+			}))
+			defer mockGateway.Close()
+
+			client := NewClient(mockGateway.URL, "key")
+			response, err := client.Act(context.Background(), ActRequest{})
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("Act() error = %v, want substring %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Act() error = %v", err)
+			}
+			if got := len(response.BodyText); got != test.bodySize-len(prefix)-len(suffix) {
+				t.Fatalf("BodyText length = %d", got)
+			}
+		})
+	}
+}
+
+func TestClient_Act_NonJSONErrorBodyIsSanitizedAndTruncated(t *testing.T) {
+	const visiblePrefix = "badresponse"
+	body := visiblePrefix + "\n\t\x00" + strings.Repeat("x", 250) + "must-not-appear"
+	mockGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(body))
+	}))
+	defer mockGateway.Close()
+
+	client := NewClient(mockGateway.URL, "key")
+	_, err := client.Act(context.Background(), ActRequest{})
+	if err == nil {
+		t.Fatal("Act() error = nil")
+	}
+	message := err.Error()
+	if strings.ContainsAny(message, "\n\t\x00") {
+		t.Fatalf("Act() error contains control characters: %q", message)
+	}
+	if strings.Contains(message, "must-not-appear") {
+		t.Fatalf("Act() error contains unbounded response body: %q", message)
+	}
+	wantSnippet := visiblePrefix + strings.Repeat("x", maxErrorSnippetBytes-len(visiblePrefix))
+	if !strings.Contains(message, wantSnippet) {
+		t.Fatalf("Act() error = %q, want sanitized %d-byte snippet", message, maxErrorSnippetBytes)
+	}
+}
 
 func TestClient_Act_Success(t *testing.T) {
 	t.Parallel()
