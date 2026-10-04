@@ -5,17 +5,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/url"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Clawdlinux/agentgate/pkg/sdk"
 )
 
-const protocolVersion = "2025-03-26"
+// 2025-06-18 removed JSON-RPC batching, so batch arrays are intentionally unsupported.
+const protocolVersion = "2025-06-18"
+
+const maxLineBytes = 10 << 20
+
+var errLineTooLong = errors.New("input line too long")
+
+var envelopeKeys = map[string]bool{"jsonrpc": true, "id": true, "method": true, "params": true}
 
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -25,6 +34,7 @@ type request struct {
 }
 
 func main() {
+	log.SetFlags(0)
 	key := os.Getenv("AGENTGATE_AGENT_KEY")
 	if key == "" {
 		log.Fatal("AGENTGATE_AGENT_KEY is required")
@@ -46,7 +56,7 @@ func main() {
 
 func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.Client) error {
 	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 4096), 10<<20)
+	scanner.Buffer(make([]byte, 4096), maxLineBytes)
 	encoder := json.NewEncoder(output)
 	for scanner.Scan() {
 		req, envelopeError := parseRequest(scanner.Bytes())
@@ -125,6 +135,13 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			parseError := map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": -32700, "message": "Parse error"}}
+			if err := encoder.Encode(parseError); err != nil {
+				return fmt.Errorf("agentgate-mcp.serve: %w", err)
+			}
+			return fmt.Errorf("agentgate-mcp.serve: %w", errLineTooLong)
+		}
 		return fmt.Errorf("agentgate-mcp.serve: %w", err)
 	}
 	return nil
@@ -132,12 +149,12 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 
 // parseRequest validates the JSON-RPC 2.0 envelope. On error, req.ID holds the echoable id or nil.
 func parseRequest(line []byte) (request, map[string]any) {
-	if !json.Valid(line) {
+	if !utf8.Valid(line) || !json.Valid(line) {
 		return request{}, map[string]any{"code": -32700, "message": "Parse error"}
 	}
 	invalid := map[string]any{"code": -32600, "message": "Invalid Request"}
 	var fields map[string]json.RawMessage
-	if !isJSONKind(line, '{') || json.Unmarshal(line, &fields) != nil {
+	if !isJSONKind(line, '{') || hasDuplicateEnvelopeKey(line) || json.Unmarshal(line, &fields) != nil {
 		return request{}, invalid
 	}
 	var req request
@@ -153,6 +170,33 @@ func parseRequest(line []byte) (request, map[string]any) {
 	}
 	req.Params = fields["params"]
 	return req, nil
+}
+
+// hasDuplicateEnvelopeKey scans top-level keys of a valid JSON object. Nested objects are skipped.
+func hasDuplicateEnvelopeKey(line []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	if _, err := decoder.Token(); err != nil {
+		return true
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return true
+		}
+		key, _ := token.(string)
+		if envelopeKeys[key] {
+			if seen[key] {
+				return true
+			}
+			seen[key] = true
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func validID(raw json.RawMessage) bool {
