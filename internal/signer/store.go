@@ -11,6 +11,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -21,10 +22,20 @@ import (
 // private key material. It mirrors internal/vault's encryption approach so
 // the two packages stay auditable against the same pattern.
 type Store struct {
-	mu  sync.Mutex
-	db  *sql.DB
-	gcm cipher.AEAD
+	mu     sync.Mutex
+	db     *sql.DB
+	gcm    cipher.AEAD
+	active *cachedKey
+	closed bool
 }
+
+type cachedKey struct {
+	record KeyRecord
+	priv   ed25519.PrivateKey
+}
+
+// ErrStoreClosed means the cached key has been destroyed.
+var ErrStoreClosed = errors.New("signer: store closed")
 
 // NewStore creates a persistent signer key store. masterKey must be exactly
 // 32 bytes — the same master secret internal/vault uses. The store derives
@@ -67,15 +78,53 @@ func (s *Store) decrypt(ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// LoadOrCreateActive returns the active signing key and its private
-// material. If no active key exists, it generates one from crypto/rand and
-// persists it with valid_from_seq = firstSeq. If an active key exists but
-// its private material cannot be decrypted, it returns ErrKeyUnreadable —
-// it never generates a replacement in that case, because that would break
-// verification of every receipt already signed under the original key.
+// LoadOrCreateActive caches the decrypted active key on its first load.
+// Returned keys are copies. Callers must clear their private key copies after use.
+// An unreadable key returns ErrKeyUnreadable and is never replaced.
+// Only this Store may rotate keys. Rotation from another process is unsupported.
+// Run a single gateway writer per database.
 func (s *Store) LoadOrCreateActive(firstSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record, priv, err := s.loadOrCreateActiveLocked(firstSeq)
+	if err != nil {
+		return KeyRecord{}, nil, err
+	}
+	return cloneRecord(record), append(ed25519.PrivateKey(nil), priv...), nil
+}
+
+// WithActiveKey holds the key lease through fn, excluding Rotate and Close.
+// The callback must not retain key bytes or call Store methods.
+// Ledger transactions acquire this lease before acquiring SQLite's write lock.
+func (s *Store) WithActiveKey(firstSeq uint64, fn func(KeyRecord, ed25519.PrivateKey) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, priv, err := s.loadOrCreateActiveLocked(firstSeq)
+	if err != nil {
+		return err
+	}
+	return fn(cloneRecord(record), priv)
+}
+
+// Close destroys the cached private key and rejects future signing or rotation.
+// It waits for active key leases and is safe to call repeatedly.
+func (s *Store) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil {
+		clear(s.active.priv)
+		s.active = nil
+	}
+	s.closed = true
+}
+
+func (s *Store) loadOrCreateActiveLocked(firstSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
+	if s.closed {
+		return KeyRecord{}, nil, ErrStoreClosed
+	}
+	if s.active != nil {
+		return s.active.record, s.active.priv, nil
+	}
 
 	record, encPriv, err := s.queryActive()
 	if err == sql.ErrNoRows {
@@ -89,19 +138,30 @@ func (s *Store) LoadOrCreateActive(firstSeq uint64) (KeyRecord, ed25519.PrivateK
 	if err != nil {
 		return KeyRecord{}, nil, err
 	}
-	return record, ed25519.PrivateKey(plaintext), nil
+	if len(plaintext) != ed25519.PrivateKeySize {
+		clear(plaintext)
+		return KeyRecord{}, nil, ErrKeyUnreadable
+	}
+	s.active = &cachedKey{record: record, priv: ed25519.PrivateKey(plaintext)}
+	return s.active.record, s.active.priv, nil
 }
 
 // Rotate deactivates the current active key at atSeq-1 and activates a new
 // key starting at atSeq. atSeq must strictly exceed the current active
 // key's valid_from_seq.
+// If a receipt ledger exists, atSeq must immediately follow its committed head.
+// A stale boundary fails without changing the active key or its cached bytes.
 func (s *Store) Rotate(atSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return KeyRecord{}, nil, ErrStoreClosed
+	}
 
 	current, _, err := s.queryActive()
 	if err == sql.ErrNoRows {
-		return s.createActiveLocked(atSeq)
+		record, priv, err := s.createActiveLocked(atSeq)
+		return cloneRecord(record), append(ed25519.PrivateKey(nil), priv...), err
 	}
 	if err != nil {
 		return KeyRecord{}, nil, fmt.Errorf("signer: query active: %w", err)
@@ -114,6 +174,7 @@ func (s *Store) Rotate(atSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
 	if err != nil {
 		return KeyRecord{}, nil, fmt.Errorf("signer: generate key: %w", err)
 	}
+	defer clear(priv)
 	encPriv, err := s.encrypt(priv)
 	if err != nil {
 		return KeyRecord{}, nil, err
@@ -130,6 +191,23 @@ func (s *Store) Rotate(atSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
 	if _, err := tx.Exec(`UPDATE signer_keys SET active = 0, valid_until_seq = ? WHERE kid = ?`, untilSeq, current.KID); err != nil {
 		return KeyRecord{}, nil, fmt.Errorf("signer: deactivate current: %w", err)
 	}
+	// The update holds SQLite's write lock before checking the rotation boundary.
+	// Standalone signer databases do not have a receipt ledger.
+	var hasLedger bool
+	if err := tx.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'receipts'
+	)`).Scan(&hasLedger); err != nil {
+		return KeyRecord{}, nil, fmt.Errorf("signer: detect ledger: %w", err)
+	}
+	if hasLedger {
+		var head uint64
+		if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM receipts`).Scan(&head); err != nil {
+			return KeyRecord{}, nil, fmt.Errorf("signer: rotation head: %w", err)
+		}
+		if atSeq != head+1 {
+			return KeyRecord{}, nil, ErrRotationSequence
+		}
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO signer_keys (kid, public_key, private_key_enc, valid_from_seq, valid_until_seq, active)
 		VALUES (?, ?, ?, ?, NULL, 1)
@@ -140,11 +218,13 @@ func (s *Store) Rotate(atSeq uint64) (KeyRecord, ed25519.PrivateKey, error) {
 		return KeyRecord{}, nil, fmt.Errorf("signer: commit rotate: %w", err)
 	}
 
-	return KeyRecord{
+	record := KeyRecord{
 		KID:          kid,
 		PublicKey:    pub,
 		ValidFromSeq: atSeq,
-	}, priv, nil
+	}
+	s.replaceActiveLocked(record, priv)
+	return cloneRecord(record), append(ed25519.PrivateKey(nil), priv...), nil
 }
 
 // PublicKeys returns every signing key, active and historical, ordered by
@@ -195,6 +275,7 @@ func (s *Store) createActiveLocked(firstSeq uint64) (KeyRecord, ed25519.PrivateK
 	if err != nil {
 		return KeyRecord{}, nil, fmt.Errorf("signer: generate key: %w", err)
 	}
+	defer clear(priv)
 	encPriv, err := s.encrypt(priv)
 	if err != nil {
 		return KeyRecord{}, nil, err
@@ -209,11 +290,31 @@ func (s *Store) createActiveLocked(firstSeq uint64) (KeyRecord, ed25519.PrivateK
 		return KeyRecord{}, nil, fmt.Errorf("signer: insert first active: %w", err)
 	}
 
-	return KeyRecord{
-		KID:          kid,
-		PublicKey:    pub,
-		ValidFromSeq: firstSeq,
-	}, priv, nil
+	record, _, err := s.queryActive()
+	if err != nil {
+		return KeyRecord{}, nil, fmt.Errorf("signer: query created key: %w", err)
+	}
+	s.replaceActiveLocked(record, priv)
+	return s.active.record, s.active.priv, nil
+}
+
+func (s *Store) replaceActiveLocked(record KeyRecord, priv ed25519.PrivateKey) {
+	if s.active != nil {
+		clear(s.active.priv)
+	}
+	s.active = &cachedKey{
+		record: cloneRecord(record),
+		priv:   append(ed25519.PrivateKey(nil), priv...),
+	}
+}
+
+func cloneRecord(record KeyRecord) KeyRecord {
+	record.PublicKey = append(ed25519.PublicKey(nil), record.PublicKey...)
+	if record.ValidUntilSeq != nil {
+		until := *record.ValidUntilSeq
+		record.ValidUntilSeq = &until
+	}
+	return record
 }
 
 type rowScanner interface {

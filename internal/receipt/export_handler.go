@@ -151,6 +151,7 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 			return
 		}
 		manifest = SignManifest(manifest, activeKey.KID, priv)
+		clear(priv)
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

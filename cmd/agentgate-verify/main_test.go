@@ -64,6 +64,10 @@ func buildTestChain(t *testing.T, n int) (dbPath, trustPath string, receipts []r
 	}
 	ledger := receipt.NewLedger(database, store)
 
+	t.Cleanup(func() {
+		ledger.Close()
+		store.Close()
+	})
 	for i := 0; i < n; i++ {
 		draft := receipt.Draft{
 			HumanPrincipal: "user-1",
@@ -491,6 +495,10 @@ func buildTestExportJSONL(t *testing.T, appendCount int, query string) (path str
 		t.Fatalf("LoadOrCreateActive: %v", err)
 	}
 	ledger := receipt.NewLedger(database, store)
+	t.Cleanup(func() {
+		ledger.Close()
+		store.Close()
+	})
 	for i := 0; i < appendCount; i++ {
 		draft := receipt.Draft{
 			HumanPrincipal: "user-1",

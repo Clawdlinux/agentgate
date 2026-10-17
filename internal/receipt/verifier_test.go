@@ -62,7 +62,12 @@ func newTestLedgerAndStore(t *testing.T) (*Ledger, *signer.Store) {
 	if _, _, err := store.LoadOrCreateActive(1); err != nil {
 		t.Fatalf("LoadOrCreateActive: %v", err)
 	}
-	return NewLedger(database, store), store
+	ledger := NewLedger(database, store)
+	t.Cleanup(func() {
+		ledger.Close()
+		store.Close()
+	})
+	return ledger, store
 }
 
 func TestVerifyChain_ValidChainPasses(t *testing.T) {
