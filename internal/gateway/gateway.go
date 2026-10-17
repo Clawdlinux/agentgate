@@ -28,7 +28,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"math/big"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -434,7 +438,15 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 
-	upstreamURL := buildURL(svc.BaseURL, action.Path, att.params)
+	upstreamURL, err := buildURL(svc.BaseURL, action.Path, att.params)
+	if err != nil {
+		return &outcome{
+			status:         http.StatusBadRequest,
+			body:           ErrorResponse{Error: "invalid params", Code: "bad_request"},
+			policyDecision: "deny",
+			errorCode:      "bad_request",
+		}
+	}
 
 	var bodyReader io.Reader
 	if action.Method == "POST" || action.Method == "PUT" || action.Method == "PATCH" {
@@ -561,19 +573,78 @@ func injectAuth(r *http.Request, auth registry.AuthCfg, tok vault.Token) {
 	}
 }
 
-// buildURL constructs the full upstream URL with path parameters
-// substituted from decoded params. json.Number preserves the
-// parameter's original numeric text instead of reformatting it through a
-// float64 round trip.
-func buildURL(baseURL, pathTemplate string, params map[string]any) string {
-	path := pathTemplate
-	for k, v := range params {
-		placeholder := "{" + k + "}"
-		if strings.Contains(path, placeholder) {
-			path = strings.ReplaceAll(path, placeholder, fmt.Sprint(v))
-		}
+var errInvalidPathParams = errors.New("invalid path params")
+
+// buildURL scans the template once. Inserted values are escaped single path segments.
+func buildURL(baseURL, pathTemplate string, params map[string]any) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", errors.New("invalid base URL")
 	}
-	return strings.TrimRight(baseURL, "/") + path
+
+	var path strings.Builder
+	for len(pathTemplate) > 0 {
+		start := strings.IndexByte(pathTemplate, '{')
+		if start < 0 {
+			path.WriteString(pathTemplate)
+			break
+		}
+		path.WriteString(pathTemplate[:start])
+		pathTemplate = pathTemplate[start+1:]
+		end := strings.IndexByte(pathTemplate, '}')
+		if end <= 0 {
+			return "", errInvalidPathParams
+		}
+		value, ok := params[pathTemplate[:end]]
+		if !ok {
+			return "", errInvalidPathParams
+		}
+		escaped, err := escapePathParam(value)
+		if err != nil {
+			return "", err
+		}
+		path.WriteString(escaped)
+		pathTemplate = pathTemplate[end+1:]
+	}
+	fullURL := strings.TrimRight(baseURL, "/") + path.String()
+	parsed, err := url.Parse(fullURL)
+	if err != nil || parsed.Scheme != base.Scheme || parsed.Host != base.Host {
+		return "", errors.New("invalid upstream URL origin")
+	}
+	return fullURL, nil
+}
+
+func escapePathParam(value any) (string, error) {
+	var text string
+	switch v := value.(type) {
+	case string:
+		text = v
+	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		text = fmt.Sprint(v)
+	case json.Number:
+		text = v.String()
+		if !json.Valid([]byte(text)) {
+			return "", errInvalidPathParams
+		}
+		// Check integrality without rounding large integers or near-integer fractions through float64.
+		number, ok := new(big.Rat).SetString(text)
+		if !ok || !number.IsInt() {
+			return "", errInvalidPathParams
+		}
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v {
+			return "", errInvalidPathParams
+		}
+		text = strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		return escapePathParam(float64(v))
+	default:
+		return "", errInvalidPathParams
+	}
+	if text == "" || text == "." || text == ".." {
+		return "", errInvalidPathParams
+	}
+	return url.PathEscape(text), nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
