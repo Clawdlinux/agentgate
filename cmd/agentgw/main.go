@@ -125,12 +125,16 @@ func main() {
 		logger.Error("init signer", "error", err)
 		os.Exit(1)
 	}
-	if _, _, err := signerStore.LoadOrCreateActive(1); err != nil {
+	defer signerStore.Close()
+	_, signingKey, err := signerStore.LoadOrCreateActive(1)
+	clear(signingKey)
+	if err != nil {
 		logger.Error("load or create signing key", "error", err)
 		os.Exit(1)
 	}
 
 	ledger := receipt.NewLedger(database, signerStore)
+	defer ledger.Close()
 	limiter := ratelimit.New(nil) // no per-service limits configured yet; Allow() is a pass-through
 
 	delegationRoot, err := delegation.NewRootStore(database, masterKey)
@@ -227,6 +231,7 @@ func main() {
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown", "error", err)
+		_ = httpSrv.Close()
 	}
 }
 

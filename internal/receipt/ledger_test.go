@@ -21,7 +21,7 @@ func testMasterKey() []byte {
 	return []byte("01234567890123456789012345678901")
 }
 
-func newTestLedger(t *testing.T) *Ledger {
+func newTestLedger(t *testing.T, options ...LedgerOption) *Ledger {
 	t.Helper()
 	database, err := db.Open(filepath.Join(t.TempDir(), "agentgate.db"))
 	if err != nil {
@@ -39,7 +39,12 @@ func newTestLedger(t *testing.T) *Ledger {
 	if _, _, err := store.LoadOrCreateActive(1); err != nil {
 		t.Fatalf("LoadOrCreateActive: %v", err)
 	}
-	return NewLedger(database, store)
+	ledger := NewLedger(database, store, options...)
+	t.Cleanup(func() {
+		ledger.Close()
+		store.Close()
+	})
+	return ledger
 }
 
 func testDraft(service, action string) Draft {
@@ -120,6 +125,10 @@ func TestLedgerAppend_SignatureVerifiesUnderPublishedPublicKey(t *testing.T) {
 	}
 	ledger := NewLedger(database, store)
 
+	t.Cleanup(func() {
+		ledger.Close()
+		store.Close()
+	})
 	r, err := ledger.Append(t.Context(), testDraft("github", "list_repos"))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
@@ -201,14 +210,19 @@ func TestLedgerAppend_RestartResumesFromCommittedHead(t *testing.T) {
 	}
 	ledger := NewLedger(database, store)
 
+	var receipts []Receipt
 	for i := 0; i < 3; i++ {
-		if _, err := ledger.Append(t.Context(), testDraft("github", "list_repos")); err != nil {
+		r, err := ledger.Append(t.Context(), testDraft("github", "list_repos"))
+		if err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
+		receipts = append(receipts, r)
 	}
+	ledger.Close()
+	store.Close()
 	database.Close()
 
-	// "Restart": brand new db handle, store, and ledger over the same file.
+	// Restart with fresh handles over the same committed file.
 	restarted, err := db.Open(dbPath)
 	if err != nil {
 		t.Fatalf("db.Open (restart): %v", err)
@@ -222,6 +236,10 @@ func TestLedgerAppend_RestartResumesFromCommittedHead(t *testing.T) {
 		t.Fatalf("LoadOrCreateActive (restart): %v", err)
 	}
 	restartedLedger := NewLedger(restarted, restartedStore)
+	t.Cleanup(func() {
+		restartedLedger.Close()
+		restartedStore.Close()
+	})
 
 	seq, _, err := restartedLedger.Head(t.Context())
 	if err != nil {
@@ -238,6 +256,7 @@ func TestLedgerAppend_RestartResumesFromCommittedHead(t *testing.T) {
 	if r.Seq != 4 {
 		t.Fatalf("Seq after restart append = %d, want 4", r.Seq)
 	}
+	verifyLedgerChain(t, restartedLedger, append(receipts, r))
 }
 
 // TestLedgerAppend_HundredConcurrentAppendsProduceExactSequence1To100
@@ -298,6 +317,7 @@ func BenchmarkLedgerAppend(b *testing.B) {
 	if err != nil {
 		b.Fatalf("db.Open: %v", err)
 	}
+
 	defer database.Close()
 	if err := db.RunMigrations(database); err != nil {
 		b.Fatalf("db.RunMigrations: %v", err)
@@ -311,6 +331,8 @@ func BenchmarkLedgerAppend(b *testing.B) {
 	}
 	ledger := NewLedger(database, store)
 	draft := testDraft("github", "list_repos")
+	defer store.Close()
+	defer ledger.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -318,4 +340,36 @@ func BenchmarkLedgerAppend(b *testing.B) {
 			b.Fatalf("Append: %v", err)
 		}
 	}
+}
+
+func BenchmarkLedgerAppendParallel(b *testing.B) {
+	database, err := db.Open(filepath.Join(b.TempDir(), "agentgate.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer database.Close()
+	if err := db.RunMigrations(database); err != nil {
+		b.Fatal(err)
+	}
+	store, err := signer.NewStore(database, testMasterKey())
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, _, err := store.LoadOrCreateActive(1); err != nil {
+		b.Fatal(err)
+	}
+	ledger := NewLedger(database, store)
+	draft := testDraft("github", "list_repos")
+	defer store.Close()
+	defer ledger.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := ledger.Append(context.Background(), draft); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
 }

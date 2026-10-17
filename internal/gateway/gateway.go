@@ -255,9 +255,8 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 			"action", att.req.Action,
 			"error", err,
 		)
-		// Never return the would-be outcome once its receipt failed to
-		// commit (LEDG-07): the caller must not see a successful action
-		// response that has no corresponding receipt.
+		// Never return the would-be outcome without an acknowledged receipt commit (LEDG-07).
+		// A timed-out append may still commit.
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{
 			Error: "receipt commit failed; action outcome not returned",
 			Code:  "receipt_failed",

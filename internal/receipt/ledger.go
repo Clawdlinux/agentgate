@@ -9,23 +9,28 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/signer"
 	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
 
-// ErrLedgerAppend wraps every failure returned by Ledger.Append. Callers
-// should treat any error from Append as "no receipt was committed" — the
-// caller must not return a successful action response in that case
-// (LEDG-07).
+// ErrLedgerAppend wraps every Append failure.
+// Callers must not return successful action responses on failure (LEDG-07).
+// Cancellation after SQLite submission can still leave a committed receipt.
 var ErrLedgerAppend = errors.New("receipt: ledger append failed")
 
+// ErrLedgerClosed means the writer no longer accepts requests.
+var ErrLedgerClosed = errors.New("receipt: ledger closed")
+
 // Draft is the caller-supplied input to Append. The ledger itself computes
-// Seq, TimestampUnixNS, PrevHash, EntryHash, SignerKID, and Signature — a
+// Seq, TimestampUnixNS, PrevHash, EntryHash, SignerKID, and Signature. A
 // caller cannot forge or skip sequencing or signing.
 type Draft struct {
 	HumanPrincipal  string
@@ -40,12 +45,11 @@ type Draft struct {
 	Error           string
 }
 
-// Ledger owns sequence allocation, predecessor lookup, signing, and
-// persistence for the receipt chain, as one serialized SQLite transaction
-// per append (LEDG-06). It has no in-memory source of truth: every Append
-// and Head call reads the committed state directly from SQLite, so a
-// process restart resumes from exactly the committed head with no gaps or
-// duplicates (LEDG-08).
+// Ledger batches appends through a single writer (LEDG-06).
+// Each batch reads SQLite's committed head inside one BEGIN IMMEDIATE transaction.
+// Signing follows that read. All inserts commit before any success reply.
+// SQLite remains the source of truth across restarts (LEDG-08).
+// Committed sequences have no gaps. Failed transactions consume no sequence.
 //
 // Crash and completeness limits (LEDG-11): there is no atomic transaction
 // spanning SQLite and an external SaaS side effect. A SaaS action can
@@ -59,12 +63,71 @@ type Ledger struct {
 	db     *sql.DB
 	signer *signer.Store
 	nowFn  func() time.Time
+
+	batchSize  int
+	batchDelay time.Duration
+	requests   chan appendRequest
+	stop       chan struct{}
+	done       chan struct{}
+	start      sync.Once
+	stopOnce   sync.Once
+}
+
+type appendRequest struct {
+	ctx   context.Context
+	draft Draft
+	reply chan appendResult
+}
+
+type appendResult struct {
+	receipt Receipt
+	err     error
+}
+
+// LedgerOption configures batching before the writer starts.
+type LedgerOption func(*Ledger)
+
+// WithBatchSize sets the maximum receipts per transaction. Nonpositive values keep the default.
+func WithBatchSize(size int) LedgerOption {
+	return func(l *Ledger) {
+		if size > 0 {
+			l.batchSize = size
+		}
+	}
+}
+
+// WithBatchDelay sets the maximum collection wait. Zero drains ready requests without a timer.
+// Negative values keep the default.
+func WithBatchDelay(delay time.Duration) LedgerOption {
+	return func(l *Ledger) {
+		if delay >= 0 {
+			l.batchDelay = delay
+		}
+	}
 }
 
 // NewLedger constructs a Ledger backed by db and signerStore. db must
 // already have migration 002_receipts.sql applied.
-func NewLedger(db *sql.DB, signerStore *signer.Store) *Ledger {
-	return &Ledger{db: db, signer: signerStore, nowFn: time.Now}
+// The writer starts on the first valid Append. Defaults are no collection wait and 256 entries.
+func NewLedger(db *sql.DB, signerStore *signer.Store, options ...LedgerOption) *Ledger {
+	l := &Ledger{
+		db: db, signer: signerStore, nowFn: time.Now,
+		batchSize: 256,
+		requests:  make(chan appendRequest), stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	for _, option := range options {
+		option(l)
+	}
+	return l
+}
+
+// Close rejects pending requests and waits for the writer to stop.
+// An already submitted transaction finishes before Close returns.
+// Stop HTTP first, then close the ledger, signer, and database.
+func (l *Ledger) Close() {
+	l.stopOnce.Do(func() { close(l.stop) })
+	l.start.Do(func() { close(l.done) })
+	<-l.done
 }
 
 // Head returns the current committed sequence number and entry hash, or
@@ -73,70 +136,188 @@ func (l *Ledger) Head(ctx context.Context) (uint64, [32]byte, error) {
 	return readHead(ctx, l.db)
 }
 
-// Append signs and durably commits one receipt for draft inside a single
-// BEGIN IMMEDIATE transaction, returning the committed receipt. BEGIN
-// IMMEDIATE acquires SQLite's write lock before any read, so no other
-// writer can observe or act on a stale head between this transaction's
-// head-read and its insert — the ordinary pooled db.Begin() only upgrades
-// to a write lock at the first write statement, which would leave that
-// race open. On any failure the transaction rolls back and no sequence
-// number is consumed (LEDG-07).
+// Append waits for its receipt's batch to commit.
+// Invalid drafts fail before SQLite and cannot fail their valid batch peers.
+// After acquiring SQLite's write lock and reading the head, the writer drops cancelled requests.
+// Cancellation after that check stops waiting but the receipt may still commit.
+// Every returned error wraps ErrLedgerAppend.
 func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, appendError(err)
+	}
+	select {
+	case <-l.stop:
+		return Receipt{}, appendError(ErrLedgerClosed)
+	default:
+	}
+	draft.DelegationChain = slices.Clone(draft.DelegationChain)
+	preflight := draft.receipt()
+	preflight.Seq, preflight.TimestampUnixNS, preflight.SignerKID = 1, 1, "preflight"
+	if _, err := receiptspec.CanonicalHashInput(preflight); err != nil {
+		return Receipt{}, appendError(err)
+	}
+	request := appendRequest{ctx: ctx, draft: draft, reply: make(chan appendResult, 1)}
+	l.start.Do(func() { go l.run() })
+	select {
+	case l.requests <- request:
+	case <-ctx.Done():
+		return Receipt{}, appendError(ctx.Err())
+	case <-l.stop:
+		return Receipt{}, appendError(ErrLedgerClosed)
+	}
+	select {
+	case result := <-request.reply:
+		return result.receipt, result.err
+	case <-ctx.Done():
+		return Receipt{}, appendError(ctx.Err())
+	}
+}
+
+func appendError(err error) error {
+	return fmt.Errorf("%w: %w", ErrLedgerAppend, err)
+}
+
+// run deliberately has no recover. A writer panic terminates the process.
+// Stack unwinding rolls back open transactions. Success replies require COMMIT, so panics cannot report uncommitted receipts.
+func (l *Ledger) run() {
+	defer close(l.done)
+	for {
+		var first appendRequest
+		select {
+		case <-l.stop:
+			return
+		case first = <-l.requests:
+		}
+		l.flush(l.collectBatch(first))
+	}
+}
+
+func (l *Ledger) collectBatch(first appendRequest) []appendRequest {
+	batch := []appendRequest{first}
+	if l.batchDelay == 0 {
+		for len(batch) < l.batchSize {
+			select {
+			case <-l.stop:
+				return batch
+			case request := <-l.requests:
+				batch = append(batch, request)
+			default:
+				return batch
+			}
+		}
+		return batch
+	}
+	timer := time.NewTimer(l.batchDelay)
+	defer timer.Stop()
+	for len(batch) < l.batchSize {
+		select {
+		case <-l.stop:
+			return batch
+		case request := <-l.requests:
+			batch = append(batch, request)
+		case <-timer.C:
+			return batch
+		}
+	}
+	return batch
+}
+
+func (l *Ledger) flush(batch []appendRequest) {
+	var results []appendResult
+	// The lease excludes rotation through the entire transaction, including COMMIT.
+	// Acquire it before SQLite's lock to avoid lock inversion with Rotate.
+	err := l.signer.WithActiveKey(1, func(key signer.KeyRecord, priv ed25519.PrivateKey) error {
+		select {
+		case <-l.stop:
+			return ErrLedgerClosed
+		default:
+		}
+		var err error
+		results, err = l.commitBatch(batch, key, priv)
+		return err
+	})
+	for i, request := range batch {
+		if err != nil {
+			request.reply <- appendResult{err: appendError(err)}
+		} else {
+			request.reply <- results[i]
+		}
+	}
+}
+
+func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv ed25519.PrivateKey) ([]appendResult, error) {
+	// Caller cancellation must not interrupt a shared transaction.
+	ctx := context.Background()
 	conn, err := l.db.Conn(ctx)
 	if err != nil {
-		return Receipt{}, fmt.Errorf("%w: acquire connection: %v", ErrLedgerAppend, err)
+		return nil, fmt.Errorf("acquire connection: %w", err)
 	}
 	defer conn.Close()
 
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return Receipt{}, fmt.Errorf("%w: begin: %v", ErrLedgerAppend, err)
+		return nil, fmt.Errorf("begin: %w", err)
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			// Best-effort rollback on a fresh context: ctx may already be
-			// canceled or expired by the time a prior step failed.
-			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+			if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+				// Never return a connection with an open transaction to the pool.
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
 		}
 	}()
 
 	head, prevHash, err := readHead(ctx, conn)
 	if err != nil {
-		return Receipt{}, fmt.Errorf("%w: read head: %v", ErrLedgerAppend, err)
+		return nil, fmt.Errorf("read head: %w", err)
 	}
-
-	keyRecord, priv, err := l.signer.LoadOrCreateActive(1)
-	if err != nil {
-		return Receipt{}, fmt.Errorf("%w: signer key: %v", ErrLedgerAppend, err)
+	// BEGIN can wait on another writer. Check deadlines only after that wait and the head read.
+	results := make([]appendResult, len(batch))
+	active := 0
+	for i, request := range batch {
+		if err := request.ctx.Err(); err != nil {
+			results[i].err = appendError(err)
+		} else {
+			active++
+		}
 	}
-
-	chain := receiptspec.NewChain(storeSigner{kid: keyRecord.KID, priv: priv}, head, prevHash)
-	r, err := chain.Next(receiptspec.Fields{
-		TimestampUnixNS: uint64(l.nowFn().UnixNano()),
-		HumanPrincipal:  draft.HumanPrincipal,
-		AgentKeyID:      draft.AgentKeyID,
-		DelegationChain: draft.DelegationChain,
-		Service:         draft.Service,
-		Action:          draft.Action,
-		ParamsSHA256:    draft.ParamsSHA256,
-		PolicyDecision:  draft.PolicyDecision,
-		StatusCode:      draft.StatusCode,
-		LatencyMS:       draft.LatencyMS,
-		Error:           draft.Error,
-	})
-	if err != nil {
-		return Receipt{}, fmt.Errorf("%w: compute hash: %v", ErrLedgerAppend, err)
+	if active == 0 {
+		return results, nil
 	}
-
-	if err := insertReceipt(ctx, conn, r); err != nil {
-		return Receipt{}, fmt.Errorf("%w: insert: %v", ErrLedgerAppend, err)
+	if head+1 < key.ValidFromSeq {
+		return nil, errors.New("active signing key starts after the next receipt")
+	}
+	for i, request := range batch {
+		if results[i].err != nil {
+			continue
+		}
+		r := request.draft.receipt()
+		r.Seq, r.PrevHash, r.TimestampUnixNS = head+1, prevHash, uint64(l.nowFn().UnixNano())
+		r, err = receiptspec.Seal(r, storeSigner{kid: key.KID, priv: priv})
+		if err != nil {
+			return nil, fmt.Errorf("sign receipt: %w", err)
+		}
+		if err := insertReceipt(ctx, conn, r); err != nil {
+			return nil, fmt.Errorf("insert: %w", err)
+		}
+		results[i].receipt = r
+		head, prevHash = r.Seq, r.EntryHash
 	}
 
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return Receipt{}, fmt.Errorf("%w: commit: %v", ErrLedgerAppend, err)
+		return nil, fmt.Errorf("commit: %w", err)
 	}
 	committed = true
-	return r, nil
+	return results, nil
+}
+
+func (d Draft) receipt() Receipt {
+	return Receipt{
+		HumanPrincipal: d.HumanPrincipal, AgentKeyID: d.AgentKeyID,
+		DelegationChain: d.DelegationChain, Service: d.Service, Action: d.Action,
+		ParamsSHA256: d.ParamsSHA256, PolicyDecision: d.PolicyDecision,
+		StatusCode: d.StatusCode, LatencyMS: d.LatencyMS, Error: d.Error,
+	}
 }
 
 // storeSigner signs with the signer store's active key under its stored KID.

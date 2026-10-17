@@ -68,6 +68,24 @@ enter the gateway URL, then the value of `AGENTGATE_ADMIN_SECRET`. The
 dashboard checks the visible receipt chain locally. Use the standalone
 verifier below for full cryptographic proof.
 
+### Receipt durability
+
+The ledger commits immediately by default, batching up to 256 requests that are already waiting.
+Requests arriving during a commit form the next batch.
+A single writer signs each batch inside one `BEGIN IMMEDIATE` transaction.
+It reads the committed head once and commits every insert before replying.
+Invalid drafts fail separately. A failed transaction consumes no sequence numbers.
+After acquiring SQLite's write lock, the writer reads the head and drops cancelled requests before signing.
+After that check, a receipt can commit even if its caller stops waiting.
+The gateway never returns a successful action response without a committed receipt.
+
+The signer caches its decrypted active key in memory.
+Run a single gateway writer per database. Rotation from another process is unsupported.
+Rotation must start at the next committed sequence. A stale or future boundary fails without changing the key.
+Shutdown stops HTTP first, then closes the ledger and clears the signer's cached private key.
+`receipt.WithBatchDelay` and `receipt.WithBatchSize` configure batching for embedded gateways.
+The default delay is 0. A positive delay adds a maximum collection window before each commit.
+
 ### Auditing, standalone
 
 Verification never depends on the gateway, Docker, or a Go toolchain — it
