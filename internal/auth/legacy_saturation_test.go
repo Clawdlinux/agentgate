@@ -34,8 +34,8 @@ func TestLegacySaturationLoggingIsRateLimitedAndContainsNoKey(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if calls.Load() != 0 || database.lookups.Load() != 0 || database.scans.Load() != 0 {
-		t.Fatal("saturated validation reached bcrypt or SQLite")
+	if calls.Load() != 0 || database.lookups.Load() != 2 || database.scans.Load() != 0 {
+		t.Fatal("saturated validation did more than indexed lookups")
 	}
 	if strings.Count(logs.String(), "capacity reached") != 1 || !strings.Contains(logs.String(), "level=DEBUG") ||
 		strings.Contains(logs.String(), "ag_live_") {

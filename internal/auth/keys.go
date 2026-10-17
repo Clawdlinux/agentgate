@@ -251,18 +251,6 @@ var (
 )
 
 func (s *KeyStore) validateLegacy(ctx context.Context, plaintext string) (*AgentKey, error) {
-	select {
-	case legacyValidationSlots <- struct{}{}:
-		defer func() { <-legacyValidationSlots }()
-	default:
-		now := time.Now().UnixNano()
-		next := legacySaturationLogAt.Load()
-		if now >= next && legacySaturationLogAt.CompareAndSwap(next, now+int64(time.Minute)) {
-			slog.Debug("legacy API key validation capacity reached")
-		}
-		return nil, ErrKeyNotFound
-	}
-
 	lookup := s.keyHMAC([]byte(plaintext))
 	var key AgentKey
 	var servicesJSON, usersJSON string
@@ -330,6 +318,18 @@ func (s *KeyStore) legacyCandidates(ctx context.Context) ([]legacyCandidate, err
 }
 
 func (s *KeyStore) scanLegacy(ctx context.Context, plaintext string) (*AgentKey, error) {
+	select {
+	case legacyValidationSlots <- struct{}{}:
+		defer func() { <-legacyValidationSlots }()
+	default:
+		now := time.Now().UnixNano()
+		next := legacySaturationLogAt.Load()
+		if now >= next && legacySaturationLogAt.CompareAndSwap(next, now+int64(time.Minute)) {
+			slog.Debug("legacy API key fallback capacity reached")
+		}
+		return nil, ErrKeyNotFound
+	}
+
 	// Release the database connection before bcrypt, so revocation can proceed.
 	candidates, err := s.legacyCandidates(ctx)
 	if err != nil {

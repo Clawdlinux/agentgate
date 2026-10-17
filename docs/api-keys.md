@@ -44,7 +44,8 @@ The first successful bcrypt check persists that lookup. Later checks no longer n
 Successful validations also enter the verified-key cache.
 Revoked legacy keys return `ErrKeyNotFound`. Revoked rows never enter the bcrypt scan.
 The gateway warns once per legacy key ID per process. It never logs the presented key.
-At most 2 uncached legacy validations run per process. Excess attempts fail immediately with `ErrKeyNotFound`.
+At most 2 fallback scans run per process. Excess fallback attempts fail immediately with `ErrKeyNotFound`.
+Indexed legacy validations and verified-key cache hits remain available during saturation.
 Saturation logs use debug level, contain no key material, and occur at most once per minute.
 Unupgraded active rows still incur bcrypt work on misses.
 Once every legacy row is upgraded or revoked, legacy misses perform zero bcrypt calls.
