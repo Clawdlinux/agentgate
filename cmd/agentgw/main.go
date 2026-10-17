@@ -166,6 +166,7 @@ func main() {
 		Delegation: delegationVerifier,
 		Refreshers: buildTokenRefreshers(oauthProviders),
 	})
+	defer srv.CloseIdleConnections()
 
 	adminSecret := os.Getenv("AGENTGATE_ADMIN_SECRET")
 	if adminSecret == "" {
