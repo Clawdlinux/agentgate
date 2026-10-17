@@ -119,10 +119,12 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(signerStore.Close)
 	if _, _, err := signerStore.LoadOrCreateActive(1); err != nil {
 		t.Fatal(err)
 	}
 	ledger := receipt.NewLedger(database, signerStore)
+	t.Cleanup(ledger.Close)
 
 	// OAuth.
 	oauthHandler := oauth.NewCallbackHandler(map[string]*oauth.Provider{

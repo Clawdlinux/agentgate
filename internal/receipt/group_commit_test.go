@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -263,6 +264,117 @@ func TestLedgerCancelAfterSQLiteCanCommit(t *testing.T) {
 	verifyLedgerChain(t, ledger, []Receipt{r})
 }
 
+func holdLedgerWriteLock(t *testing.T, ledger *Ledger) func() {
+	t.Helper()
+	ledger.db.SetMaxOpenConns(2)
+	blocker, err := ledger.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { blocker.Close() })
+	writer, err := ledger.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.ExecContext(t.Context(), `PRAGMA busy_timeout = 5000`); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.ExecContext(t.Context(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	unlock := func() {
+		once.Do(func() {
+			if _, err := blocker.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Cleanup(unlock)
+	return unlock
+}
+
+func waitForLedgerWriteConnection(t *testing.T, ctx context.Context, ledger *Ledger) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for ledger.db.Stats().InUse != 2 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("writer did not acquire its connection before the deadline")
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestLedgerCancelWhileWaitingForWriteLockConsumesNoSequence(t *testing.T) {
+	ledger := newTestLedger(t, WithBatchSize(1))
+	before, err := ledger.Append(t.Context(), testDraft("github", "before_lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock := holdLedgerWriteLock(t, ledger)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := ledger.Append(ctx, testDraft("github", "cancelled_under_contention"))
+		result <- err
+	}()
+	waitForLedgerWriteConnection(t, ctx, ledger)
+	<-ctx.Done()
+	if err := <-result; !errors.Is(err, ErrLedgerAppend) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("append deadline err = %v", err)
+	}
+	unlock()
+	ledger.Close()
+	if seq, hash, err := ledger.Head(t.Context()); err != nil || seq != before.Seq || hash != before.EntryHash {
+		t.Fatalf("head after cancelled lock wait = %d, err=%v", seq, err)
+	}
+	resumed := NewLedger(ledger.db, ledger.signer, WithBatchSize(1))
+	defer resumed.Close()
+	after, err := resumed.Append(t.Context(), testDraft("github", "after_lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyLedgerChain(t, resumed, []Receipt{before, after})
+}
+
+func TestLedgerLockWaitCancellationDoesNotDropActiveBatchPeer(t *testing.T) {
+	ledger := newTestLedger(t, WithBatchSize(2), WithBatchDelay(time.Hour))
+	unlock := holdLedgerWriteLock(t, ledger)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	cancelled := make(chan error, 1)
+	active := make(chan appendResult, 1)
+	go func() {
+		_, err := ledger.Append(ctx, testDraft("github", "cancelled"))
+		cancelled <- err
+	}()
+	go func() {
+		r, err := ledger.Append(t.Context(), testDraft("github", "active"))
+		active <- appendResult{receipt: r, err: err}
+	}()
+	waitForLedgerWriteConnection(t, ctx, ledger)
+	<-ctx.Done()
+	if err := <-cancelled; !errors.Is(err, ErrLedgerAppend) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("append deadline err = %v", err)
+	}
+	unlock()
+	result := <-active
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.receipt.Action != "active" || result.receipt.Seq != 1 {
+		t.Fatalf("active receipt = %s at seq %d", result.receipt.Action, result.receipt.Seq)
+	}
+	verifyLedgerChain(t, ledger, []Receipt{result.receipt})
+}
+
 func TestLedgerRotationWaitsForSubmittedBatch(t *testing.T) {
 	ledger := newTestLedger(t, WithBatchSize(1))
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -287,6 +399,30 @@ func TestLedgerRotationWaitsForSubmittedBatch(t *testing.T) {
 		clear(priv)
 		rotated <- err
 	}()
+	// Observe Rotate blocked on the lease, not merely scheduled to call it.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	stacks := make([]byte, 64<<10)
+	for {
+		waiting := false
+		for _, stack := range strings.Split(string(stacks[:runtime.Stack(stacks, true)]), "\n\n") {
+			if strings.Contains(stack, "signer.(*Store).Rotate(") && strings.Contains(stack, "sync.(*Mutex).Lock") {
+				waiting = true
+				break
+			}
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-rotated:
+			t.Fatalf("Rotate returned before the batch released its lease: %v", err)
+		case <-deadline.C:
+			t.Fatal("Rotate did not block on the batch's key lease")
+		default:
+			runtime.Gosched()
+		}
+	}
 	unblock.Do(func() { close(release) })
 	before := <-committed
 	if before.err != nil {

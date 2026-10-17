@@ -138,8 +138,8 @@ func (l *Ledger) Head(ctx context.Context) (uint64, [32]byte, error) {
 
 // Append waits for its receipt's batch to commit.
 // Invalid drafts fail before SQLite and cannot fail their valid batch peers.
-// Requests cancelled before SQLite submission are dropped.
-// After submission, cancellation stops waiting but the receipt may still commit.
+// After acquiring SQLite's write lock and reading the head, the writer drops cancelled requests.
+// Cancellation after that check stops waiting but the receipt may still commit.
 // Every returned error wraps ErrLedgerAppend.
 func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 	if err := ctx.Err(); err != nil {
@@ -177,6 +177,8 @@ func appendError(err error) error {
 	return fmt.Errorf("%w: %w", ErrLedgerAppend, err)
 }
 
+// run deliberately has no recover. A writer panic terminates the process.
+// Stack unwinding rolls back open transactions. Success replies require COMMIT, so panics cannot report uncommitted receipts.
 func (l *Ledger) run() {
 	defer close(l.done)
 	for {
@@ -221,7 +223,7 @@ func (l *Ledger) collectBatch(first appendRequest) []appendRequest {
 }
 
 func (l *Ledger) flush(batch []appendRequest) {
-	var receipts []Receipt
+	var results []appendResult
 	// The lease excludes rotation through the entire transaction, including COMMIT.
 	// Acquire it before SQLite's lock to avoid lock inversion with Rotate.
 	err := l.signer.WithActiveKey(1, func(key signer.KeyRecord, priv ed25519.PrivateKey) error {
@@ -230,32 +232,20 @@ func (l *Ledger) flush(batch []appendRequest) {
 			return ErrLedgerClosed
 		default:
 		}
-		active := batch[:0]
-		for _, request := range batch {
-			if err := request.ctx.Err(); err != nil {
-				request.reply <- appendResult{err: appendError(err)}
-			} else {
-				active = append(active, request)
-			}
-		}
-		batch = active
-		if len(batch) == 0 {
-			return nil
-		}
 		var err error
-		receipts, err = l.commitBatch(batch, key, priv)
+		results, err = l.commitBatch(batch, key, priv)
 		return err
 	})
 	for i, request := range batch {
 		if err != nil {
 			request.reply <- appendResult{err: appendError(err)}
 		} else {
-			request.reply <- appendResult{receipt: receipts[i]}
+			request.reply <- results[i]
 		}
 	}
 }
 
-func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv ed25519.PrivateKey) ([]Receipt, error) {
+func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv ed25519.PrivateKey) ([]appendResult, error) {
 	// Caller cancellation must not interrupt a shared transaction.
 	ctx := context.Background()
 	conn, err := l.db.Conn(ctx)
@@ -281,11 +271,26 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 	if err != nil {
 		return nil, fmt.Errorf("read head: %w", err)
 	}
+	// BEGIN can wait on another writer. Check deadlines only after that wait and the head read.
+	results := make([]appendResult, len(batch))
+	active := 0
+	for i, request := range batch {
+		if err := request.ctx.Err(); err != nil {
+			results[i].err = appendError(err)
+		} else {
+			active++
+		}
+	}
+	if active == 0 {
+		return results, nil
+	}
 	if head+1 < key.ValidFromSeq {
 		return nil, errors.New("active signing key starts after the next receipt")
 	}
-	receipts := make([]Receipt, 0, len(batch))
-	for _, request := range batch {
+	for i, request := range batch {
+		if results[i].err != nil {
+			continue
+		}
 		r := request.draft.receipt()
 		r.Seq, r.PrevHash, r.TimestampUnixNS = head+1, prevHash, uint64(l.nowFn().UnixNano())
 		r, err = receiptspec.Seal(r, storeSigner{kid: key.KID, priv: priv})
@@ -295,7 +300,7 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		if err := insertReceipt(ctx, conn, r); err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
 		}
-		receipts = append(receipts, r)
+		results[i].receipt = r
 		head, prevHash = r.Seq, r.EntryHash
 	}
 
@@ -303,7 +308,7 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	committed = true
-	return receipts, nil
+	return results, nil
 }
 
 func (d Draft) receipt() Receipt {

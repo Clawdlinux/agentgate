@@ -75,8 +75,8 @@ Requests arriving during a commit form the next batch.
 A single writer signs each batch inside one `BEGIN IMMEDIATE` transaction.
 It reads the committed head once and commits every insert before replying.
 Invalid drafts fail separately. A failed transaction consumes no sequence numbers.
-Cancelled requests are dropped before SQLite submission.
-After submission, a receipt can commit even if its caller stops waiting.
+After acquiring SQLite's write lock, the writer reads the head and drops cancelled requests before signing.
+After that check, a receipt can commit even if its caller stops waiting.
 The gateway never returns a successful action response without a committed receipt.
 
 The signer caches its decrypted active key in memory.
