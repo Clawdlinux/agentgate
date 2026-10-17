@@ -70,7 +70,8 @@ verifier below for full cryptographic proof.
 
 ### Receipt durability
 
-The ledger batches requests for up to 2 ms or 256 receipts.
+The ledger commits immediately by default, batching up to 256 requests that are already waiting.
+Requests arriving during a commit form the next batch.
 A single writer signs each batch inside one `BEGIN IMMEDIATE` transaction.
 It reads the committed head once and commits every insert before replying.
 Invalid drafts fail separately. A failed transaction consumes no sequence numbers.
@@ -83,6 +84,7 @@ Run a single gateway writer per database. Rotation from another process is unsup
 Rotation must start at the next committed sequence. A stale or future boundary fails without changing the key.
 Shutdown stops HTTP first, then closes the ledger and clears the signer's cached private key.
 `receipt.WithBatchDelay` and `receipt.WithBatchSize` configure batching for embedded gateways.
+The default delay is 0. A positive delay adds a maximum collection window before each commit.
 
 ### Auditing, standalone
 

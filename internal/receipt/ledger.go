@@ -96,7 +96,8 @@ func WithBatchSize(size int) LedgerOption {
 	}
 }
 
-// WithBatchDelay sets the collection window. Zero disables waiting. Negative values keep the default.
+// WithBatchDelay sets the maximum collection wait. Zero drains ready requests without a timer.
+// Negative values keep the default.
 func WithBatchDelay(delay time.Duration) LedgerOption {
 	return func(l *Ledger) {
 		if delay >= 0 {
@@ -107,12 +108,12 @@ func WithBatchDelay(delay time.Duration) LedgerOption {
 
 // NewLedger constructs a Ledger backed by db and signerStore. db must
 // already have migration 002_receipts.sql applied.
-// The writer starts on the first valid Append. Defaults are 2 ms and 256 entries.
+// The writer starts on the first valid Append. Defaults are no collection wait and 256 entries.
 func NewLedger(db *sql.DB, signerStore *signer.Store, options ...LedgerOption) *Ledger {
 	l := &Ledger{
 		db: db, signer: signerStore, nowFn: time.Now,
-		batchSize: 256, batchDelay: 2 * time.Millisecond,
-		requests: make(chan appendRequest), stop: make(chan struct{}), done: make(chan struct{}),
+		batchSize: 256,
+		requests:  make(chan appendRequest), stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	for _, option := range options {
 		option(l)
@@ -185,22 +186,38 @@ func (l *Ledger) run() {
 			return
 		case first = <-l.requests:
 		}
-		batch := []appendRequest{first}
-		timer := time.NewTimer(l.batchDelay)
-	collect:
+		l.flush(l.collectBatch(first))
+	}
+}
+
+func (l *Ledger) collectBatch(first appendRequest) []appendRequest {
+	batch := []appendRequest{first}
+	if l.batchDelay == 0 {
 		for len(batch) < l.batchSize {
 			select {
 			case <-l.stop:
-				break collect
+				return batch
 			case request := <-l.requests:
 				batch = append(batch, request)
-			case <-timer.C:
-				break collect
+			default:
+				return batch
 			}
 		}
-		timer.Stop()
-		l.flush(batch)
+		return batch
 	}
+	timer := time.NewTimer(l.batchDelay)
+	defer timer.Stop()
+	for len(batch) < l.batchSize {
+		select {
+		case <-l.stop:
+			return batch
+		case request := <-l.requests:
+			batch = append(batch, request)
+		case <-timer.C:
+			return batch
+		}
+	}
+	return batch
 }
 
 func (l *Ledger) flush(batch []appendRequest) {

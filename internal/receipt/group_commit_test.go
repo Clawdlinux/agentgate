@@ -307,7 +307,7 @@ func TestLedgerRotationWaitsForSubmittedBatch(t *testing.T) {
 
 func TestLedgerOptionsAndCloseBeforeStart(t *testing.T) {
 	ledger := NewLedger(nil, nil, WithBatchSize(0), WithBatchDelay(-time.Second))
-	if ledger.batchSize != 256 || ledger.batchDelay != 2*time.Millisecond {
+	if ledger.batchSize != 256 || ledger.batchDelay != 0 {
 		t.Fatal("invalid options replaced defaults")
 	}
 	ledger.Close()
@@ -320,6 +320,65 @@ func TestLedgerOptionsAndCloseBeforeStart(t *testing.T) {
 	if _, err := ledger.Append(cancelled, testDraft("github", "cancelled")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancelled append err = %v", err)
 	}
+}
+
+func TestLedgerLoneAppendCollectionDelay(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options []LedgerOption
+		wait    time.Duration
+	}{
+		{name: "default"},
+		{name: "explicit_zero", options: []LedgerOption{WithBatchDelay(0)}},
+		{name: "configured_window", options: []LedgerOption{WithBatchDelay(7 * time.Millisecond)}, wait: 7 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := newTestLedger(t)
+			synctest.Test(t, func(t *testing.T) {
+				ledger := NewLedger(base.db, base.signer, tc.options...)
+				defer ledger.Close()
+				start := time.Now()
+				r, err := ledger.Append(t.Context(), testDraft("github", "lone"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if elapsed := time.Since(start); elapsed != tc.wait {
+					t.Fatalf("collection delay = %v, want %v", elapsed, tc.wait)
+				}
+				if r.Seq != 1 {
+					t.Fatalf("receipt seq = %d, want 1", r.Seq)
+				}
+			})
+		})
+	}
+}
+
+func TestLedgerNoWaitDrainsReadyRequestsUpToCap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ledger := NewLedger(nil, nil, WithBatchSize(3))
+		defer ledger.Close()
+		ledger.requests = make(chan appendRequest, 5)
+		for i := range 5 {
+			ledger.requests <- appendRequest{draft: Draft{Action: fmt.Sprintf("queued_%d", i)}}
+		}
+		start := time.Now()
+		first := ledger.collectBatch(<-ledger.requests)
+		if len(first) != 3 || len(ledger.requests) != 2 {
+			t.Fatalf("batch size = %d, pending = %d", len(first), len(ledger.requests))
+		}
+		second := ledger.collectBatch(<-ledger.requests)
+		if len(second) != 2 || len(ledger.requests) != 0 {
+			t.Fatalf("next batch size = %d, pending = %d", len(second), len(ledger.requests))
+		}
+		for i, request := range append(first, second...) {
+			if want := fmt.Sprintf("queued_%d", i); request.draft.Action != want {
+				t.Fatalf("request action = %s, want %s", request.draft.Action, want)
+			}
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Fatalf("ready requests waited %v", elapsed)
+		}
+	})
 }
 
 func TestLedgerRejectsEveryInvalidEncodingBeforeBatch(t *testing.T) {
