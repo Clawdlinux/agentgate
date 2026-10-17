@@ -393,6 +393,9 @@ services:
         stream: true
 ```
 
+Path params like `{id}` are escaped as single path segments, including slashes and URL delimiters.
+See [path parameter rules](docs/registry.md#path-parameters) for accepted values and validation errors.
+
 | Setting under `upstream` | Default | Meaning |
 |-------------------------|---------|---------|
 | `request_timeout` | `30s` | Context deadline across dispatch, retries, and response reading |

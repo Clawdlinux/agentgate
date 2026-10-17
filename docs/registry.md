@@ -35,6 +35,33 @@ JSON uses `body` in the response envelope. Text uses `body_text`.
 Validated JSON bytes pass through without compaction or HTML escaping.
 Envelope field order stays unchanged. Text keeps standard JSON string escaping.
 
+## Path parameters
+
+Placeholders like `/repos/{owner}/{repo}` use values from `params`.
+Each value is escaped as a single path segment with Go's `url.PathEscape`.
+Slashes, query delimiters, fragment delimiters, percent signs, and spaces are encoded.
+For example, `owner/repo` becomes `owner%2Frepo`, and `%2e%2e` becomes `%252e%252e`.
+Inserted values aren't scanned again for placeholders.
+
+Placeholders aren't allowed after `?`. Static query strings remain supported.
+Registry loading rejects query placeholders and names the service and action without exposing template values.
+The gateway also rejects these templates defensively.
+
+Path values must be strings, integer numbers, or booleans.
+Missing values, empty strings, `.` and `..` are rejected.
+Objects, arrays, null, and non-integer numbers are rejected.
+Integer number text stays unchanged, including large integers and integral exponent notation.
+Other params can still contain objects, arrays, or null when they aren't used in the path.
+
+Invalid path params return HTTP 400 with code `bad_request` and fixed message `invalid params`.
+The receipt records status 400, policy `deny`, and error `bad_request`.
+URL validation runs before vault access or token refresh.
+Invalid base URLs return HTTP 500 with code `internal` and fixed message `failed to build upstream request`.
+The receipt records status 500, policy `allow`, and error `internal`.
+Base URL joining preserves its existing trailing-slash trimming.
+The resulting URL must retain the base URL's scheme and host.
+Connectors must declare path separators in templates, not inside param values.
+
 ## SSE negotiation and receipts
 
 Set `stream: true` only for actions that may produce SSE.
