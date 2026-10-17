@@ -14,8 +14,6 @@ import (
 	"math"
 	"strconv"
 	"unicode/utf8"
-
-	"github.com/gowebpki/jcs"
 )
 
 const (
@@ -30,22 +28,27 @@ var (
 
 // DigestParams validates and canonicalizes a JSON object, then returns its SHA-256 digest.
 func DigestParams(raw []byte) ([32]byte, error) {
+	_, digest, err := ParseAndDigestParams(raw)
+	return digest, err
+}
+
+// ParseAndDigestParams decodes params once, preserving numeric text for upstream URLs.
+// Its digest follows the same RFC 8785 rules as DigestParams.
+func ParseAndDigestParams(raw []byte) (map[string]any, [32]byte, error) {
 	normalized := normalizeParams(raw)
 	if !utf8.Valid(normalized) || !validEscapedSurrogates(normalized) {
-		return [32]byte{}, ErrInvalidParams
+		return nil, [32]byte{}, ErrInvalidParams
 	}
-	if err := validateJSONObject(normalized); err != nil {
-		return [32]byte{}, err
+	params, err := parseJSONObject(normalized)
+	if err != nil {
+		return nil, [32]byte{}, err
 	}
 
-	canonical, err := jcs.Transform(bytes.Clone(normalized))
-	if err != nil {
-		return [32]byte{}, ErrInvalidParams
-	}
+	canonical := appendParamsValue(make([]byte, 0, len(normalized)), params)
 	if len(canonical) > maxCanonicalParamsBytes {
-		return [32]byte{}, ErrParamsTooLarge
+		return nil, [32]byte{}, ErrParamsTooLarge
 	}
-	return sha256.Sum256(canonical), nil
+	return params, sha256.Sum256(canonical), nil
 }
 
 func normalizeParams(raw []byte) []byte {
@@ -53,104 +56,115 @@ func normalizeParams(raw []byte) []byte {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return []byte("{}")
 	}
-	return bytes.Clone(trimmed)
+	return trimmed
 }
 
-func validateJSONObject(raw []byte) error {
+func parseJSONObject(raw []byte) (map[string]any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 
 	first, err := decoder.Token()
 	if err != nil {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
 	delimiter, ok := first.(json.Delim)
 	if !ok || delimiter != '{' {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	if err := validateObject(decoder, 1); err != nil {
-		return err
+	params, err := parseObject(decoder, 1)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	return nil
+	return params, nil
 }
 
-func validateObject(decoder *json.Decoder, depth int) error {
+func parseObject(decoder *json.Decoder, depth int) (map[string]any, error) {
 	if depth > maxParamDepth {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	names := make(map[string]struct{})
+	params := make(map[string]any)
 	for decoder.More() {
 		nameToken, err := decoder.Token()
 		if err != nil {
-			return ErrInvalidParams
+			return nil, ErrInvalidParams
 		}
 		name, ok := nameToken.(string)
 		if !ok || containsNoncharacter(name) {
-			return ErrInvalidParams
+			return nil, ErrInvalidParams
 		}
-		if _, exists := names[name]; exists {
-			return ErrInvalidParams
+		if _, exists := params[name]; exists {
+			return nil, ErrInvalidParams
 		}
-		names[name] = struct{}{}
 
 		valueToken, err := decoder.Token()
-		if err != nil || validateToken(decoder, valueToken, depth) != nil {
-			return ErrInvalidParams
+		if err != nil {
+			return nil, ErrInvalidParams
 		}
+		value, err := parseToken(decoder, valueToken, depth)
+		if err != nil {
+			return nil, err
+		}
+		params[name] = value
 	}
 	closing, err := decoder.Token()
 	if err != nil || closing != json.Delim('}') {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	return nil
+	return params, nil
 }
 
-func validateArray(decoder *json.Decoder, depth int) error {
+func parseArray(decoder *json.Decoder, depth int) ([]any, error) {
 	if depth > maxParamDepth {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
+	values := make([]any, 0)
 	for decoder.More() {
 		token, err := decoder.Token()
-		if err != nil || validateToken(decoder, token, depth) != nil {
-			return ErrInvalidParams
+		if err != nil {
+			return nil, ErrInvalidParams
 		}
+		value, err := parseToken(decoder, token, depth)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
 	}
 	closing, err := decoder.Token()
 	if err != nil || closing != json.Delim(']') {
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	return nil
+	return values, nil
 }
 
-func validateToken(decoder *json.Decoder, token any, parentDepth int) error {
+func parseToken(decoder *json.Decoder, token any, parentDepth int) (any, error) {
 	switch value := token.(type) {
 	case json.Delim:
 		switch value {
 		case '{':
-			return validateObject(decoder, parentDepth+1)
+			return parseObject(decoder, parentDepth+1)
 		case '[':
-			return validateArray(decoder, parentDepth+1)
+			return parseArray(decoder, parentDepth+1)
 		default:
-			return ErrInvalidParams
+			return nil, ErrInvalidParams
 		}
 	case string:
 		if containsNoncharacter(value) {
-			return ErrInvalidParams
+			return nil, ErrInvalidParams
 		}
 	case json.Number:
 		parsed, err := strconv.ParseFloat(value.String(), 64)
 		if err != nil || math.IsInf(parsed, 0) || math.IsNaN(parsed) {
-			return ErrInvalidParams
+			return nil, ErrInvalidParams
 		}
 	case bool, nil:
-		return nil
+		return value, nil
 	default:
-		return ErrInvalidParams
+		return nil, ErrInvalidParams
 	}
-	return nil
+	return token, nil
 }
 
 func containsNoncharacter(value string) bool {

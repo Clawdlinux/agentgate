@@ -22,8 +22,35 @@ type Config struct {
 	MaxIdleConns          int           `yaml:"max_idle_conns,omitempty"`
 	MaxIdleConnsPerHost   int           `yaml:"max_idle_conns_per_host,omitempty"`
 	MaxConnsPerHost       int           `yaml:"max_conns_per_host,omitempty"`
+	MaxResponseBytes      int64         `yaml:"max_response_bytes,omitempty"`
+	MaxStreamBytes        int64         `yaml:"max_stream_bytes,omitempty"`
+	StreamIdleTimeout     time.Duration `yaml:"stream_idle_timeout,omitempty"`
 	Retry                 RetryConfig   `yaml:"retry,omitempty"`
 	Breaker               BreakerConfig `yaml:"breaker,omitempty"`
+}
+
+// ResponseLimit returns the buffered response limit in bytes.
+func (c Config) ResponseLimit() int64 {
+	if c.MaxResponseBytes == 0 {
+		return 1 << 20
+	}
+	return c.MaxResponseBytes
+}
+
+// StreamLimit returns the streaming response limit in bytes.
+func (c Config) StreamLimit() int64 {
+	if c.MaxStreamBytes == 0 {
+		return 64 << 20
+	}
+	return c.MaxStreamBytes
+}
+
+// StreamIdle returns the maximum wait between SSE event boundaries.
+func (c Config) StreamIdle() time.Duration {
+	if c.StreamIdleTimeout == 0 {
+		return 60 * time.Second
+	}
+	return c.StreamIdleTimeout
 }
 
 // RetryConfig bounds additional attempts and their delays.
@@ -97,6 +124,13 @@ func (c Config) Validate() error {
 		{"response_header_timeout", c.ResponseHeaderTimeout}, {"idle_conn_timeout", c.IdleConnTimeout},
 		{"retry.base_delay", c.Retry.BaseDelay}, {"retry.max_delay", c.Retry.MaxDelay},
 		{"breaker.cooldown", c.Breaker.Cooldown},
+		{"stream_idle_timeout", c.StreamIdleTimeout},
+	}
+	if c.ResponseLimit() < 1<<10 || c.ResponseLimit() > 64<<20 {
+		return fmt.Errorf("upstream: max_response_bytes must be between 1024 and 67108864")
+	}
+	if c.StreamLimit() < 1<<10 || c.StreamLimit() > 1<<30 {
+		return fmt.Errorf("upstream: max_stream_bytes must be between 1024 and 1073741824")
 	}
 	for _, d := range durations {
 		if d.value < 0 {

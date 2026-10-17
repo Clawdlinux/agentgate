@@ -121,9 +121,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// ActRequest is the body of POST /v1/act. Params stays as raw JSON so its
-// bytes can be hashed for the receipt and forwarded upstream unmodified,
-// without a lossy decode/re-encode round trip.
+// ActRequest is the body of POST /v1/act.
+// Params retains raw JSON for unchanged upstream request bodies.
+// Its decoded value is reused for the JCS receipt hash and URL construction.
 type ActRequest struct {
 	Service    string          `json:"service"`
 	Action     string          `json:"action"`
@@ -174,6 +174,7 @@ func (s *Server) handleDescribeService(w http.ResponseWriter, r *http.Request) {
 			"method": a.Method,
 			"path":   a.Path,
 			"params": a.Params,
+			"stream": a.Stream,
 		}
 	}
 
@@ -192,6 +193,8 @@ type attempt struct {
 	agentKey        *auth.AgentKey
 	req             ActRequest
 	paramsHash      [32]byte
+	params          map[string]any
+	acceptSSE       bool
 	delegationToken []byte   // raw, not yet verified; set by prepareAttempt, verified by executeAttempt
 	delegationChain []string // set by executeAttempt once delegationToken verifies; empty for a direct grant (DELG-04)
 }
@@ -216,6 +219,7 @@ type outcome struct {
 	body           any
 	policyDecision string // "allow", "deny", or "rate_limited"
 	errorCode      string // stable code; empty means no error
+	stream         *streamResponse
 }
 
 func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +230,15 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	if _, ok := w.(http.Flusher); !ok {
+		att.acceptSSE = false
+	}
 	out := s.executeAttempt(r.Context(), att)
+	if out.stream != nil {
+		defer out.stream.close()
+		stopCancel := context.AfterFunc(r.Context(), out.stream.close)
+		defer stopCancel()
+	}
 	latencyMS := time.Since(start).Milliseconds()
 
 	// A client cancellation must not abort the still-pending receipt
@@ -273,6 +285,10 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 		"status", out.status,
 		"latency_ms", latencyMS,
 	)
+	if out.stream != nil {
+		s.writeStream(w, r, att, out.stream)
+		return
+	}
 	if actResp, ok := out.body.(ActResponse); ok {
 		actResp.LatencyMS = latencyMS
 		out.body = actResp
@@ -314,11 +330,7 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 		}}
 	}
 
-	paramsRaw := req.Params
-	if len(paramsRaw) == 0 {
-		paramsRaw = []byte("{}")
-	}
-	paramsHash, err := receipt.DigestParams(paramsRaw)
+	params, paramsHash, err := receipt.ParseAndDigestParams(req.Params)
 	if err != nil {
 		return nil, &immediateResponse{status: http.StatusBadRequest, body: ErrorResponse{
 			Error: "invalid params",
@@ -326,7 +338,10 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 		}}
 	}
 
-	return &attempt{agentKey: agentKey, req: req, paramsHash: paramsHash, delegationToken: extractDelegationToken(r)}, nil
+	return &attempt{
+		agentKey: agentKey, req: req, params: params, paramsHash: paramsHash,
+		acceptSSE: acceptsEventStream(r.Header), delegationToken: extractDelegationToken(r),
+	}, nil
 }
 
 // executeAttempt runs every check and side effect after authentication and
@@ -419,15 +434,7 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 
-	upstreamURL, err := buildURL(svc.BaseURL, action.Path, att.req.Params)
-	if err != nil {
-		return &outcome{
-			status:         http.StatusInternalServerError,
-			body:           ErrorResponse{Error: "failed to build upstream request", Code: "internal"},
-			policyDecision: "allow",
-			errorCode:      "internal",
-		}
-	}
+	upstreamURL := buildURL(svc.BaseURL, action.Path, att.params)
 
 	var bodyReader io.Reader
 	if action.Method == "POST" || action.Method == "PUT" || action.Method == "PATCH" {
@@ -451,8 +458,14 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		upstream.Header.Set("Content-Type", "application/json")
 	}
 	upstream.Header.Set("Accept", "application/json")
+	streaming := action.Stream && att.acceptSSE
+	dispatch := s.upstreams.Do
+	if streaming {
+		upstream.Header.Set("Accept", "text/event-stream")
+		dispatch = s.upstreams.DoStream
+	}
 
-	resp, err := s.upstreams.Do(svc.Name, svc.Upstream, upstream, action.Idempotent)
+	resp, err := dispatch(svc.Name, svc.Upstream, upstream, action.Idempotent)
 	if err != nil {
 		status, code, message := http.StatusBadGateway, "upstream_error", "upstream request failed"
 		if errors.Is(err, upstreamclient.ErrUnavailable) {
@@ -466,15 +479,42 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 			errorCode:      code,
 		}
 	}
+	if streaming && upstreamclient.IsEventStream(resp) {
+		return &outcome{
+			status: http.StatusOK, policyDecision: "allow",
+			stream: &streamResponse{
+				body:  resp.Body,
+				limit: svc.Upstream.StreamLimit(), idle: svc.Upstream.StreamIdle(),
+			},
+		}
+	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
+	limit := svc.Upstream.ResponseLimit()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if int64(len(body)) > limit {
+		return &outcome{
+			status: http.StatusBadGateway, policyDecision: "allow",
+			body: ErrorResponse{
+				Error: "upstream response exceeds configured limit",
+				Code:  "upstream_response_too_large",
+			},
+			errorCode: "upstream_response_too_large",
+		}
+	}
+	if err != nil {
+		s.logUpstreamError(svc.Name, err)
+		return &outcome{
+			status: http.StatusBadGateway, policyDecision: "allow",
+			body:      ErrorResponse{Error: "upstream request failed", Code: "upstream_error"},
+			errorCode: "upstream_error",
+		}
+	}
 
-	var jsonBody json.RawMessage
-	if json.Unmarshal(body, &jsonBody) == nil {
+	if json.Valid(body) {
 		return &outcome{
 			status:         resp.StatusCode,
-			body:           ActResponse{Status: resp.StatusCode, Body: jsonBody},
+			body:           ActResponse{Status: resp.StatusCode, Body: json.RawMessage(body)},
 			policyDecision: "allow",
 		}
 	}
@@ -522,31 +562,25 @@ func injectAuth(r *http.Request, auth registry.AuthCfg, tok vault.Token) {
 }
 
 // buildURL constructs the full upstream URL with path parameters
-// substituted from the raw params JSON. json.Number preserves the
+// substituted from decoded params. json.Number preserves the
 // parameter's original numeric text instead of reformatting it through a
 // float64 round trip.
-func buildURL(baseURL, pathTemplate string, paramsRaw json.RawMessage) (string, error) {
+func buildURL(baseURL, pathTemplate string, params map[string]any) string {
 	path := pathTemplate
-	if len(paramsRaw) == 0 {
-		return strings.TrimRight(baseURL, "/") + path, nil
-	}
-
-	var params map[string]interface{}
-	dec := json.NewDecoder(bytes.NewReader(paramsRaw))
-	dec.UseNumber()
-	if err := dec.Decode(&params); err != nil {
-		return "", err
-	}
 	for k, v := range params {
 		placeholder := "{" + k + "}"
 		if strings.Contains(path, placeholder) {
 			path = strings.ReplaceAll(path, placeholder, fmt.Sprint(v))
 		}
 	}
-	return strings.TrimRight(baseURL, "/") + path, nil
+	return strings.TrimRight(baseURL, "/") + path
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	if response, ok := v.(ActResponse); ok && len(response.Body) > 0 {
+		writeActResponse(w, status, response)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)

@@ -369,6 +369,9 @@ services:
       response_header_timeout: 10s
       max_idle_conns_per_host: 64
       max_conns_per_host: 0
+      max_response_bytes: 1048576
+      max_stream_bytes: 67108864
+      stream_idle_timeout: 60s
       retry:
         max_retries: 2
         base_delay: 100ms
@@ -384,6 +387,10 @@ services:
         method: PUT
         path: /items/{id}
         idempotent: true
+      events:
+        method: GET
+        path: /events
+        stream: true
 ```
 
 | Setting under `upstream` | Default | Meaning |
@@ -397,6 +404,9 @@ services:
 | `max_idle_conns` | `256` | Idle connections per service |
 | `max_idle_conns_per_host` | `32` | Idle connections per upstream host |
 | `max_conns_per_host` | `0` | Total connections per host. `0` means unlimited. |
+| `max_response_bytes` | `1048576` | Buffered response limit. Range: 1024 to 67108864 bytes. |
+| `max_stream_bytes` | `67108864` | SSE response limit. Range: 1024 to 1073741824 bytes. |
+| `stream_idle_timeout` | `60s` | Maximum wait between SSE event boundaries |
 | `retry.max_retries` | `2` | Additional attempts. `0` disables retries. |
 | `retry.base_delay` | `100ms` | Initial exponential backoff ceiling |
 | `retry.max_delay` | `2s` | Backoff and Retry-After cap |
@@ -438,6 +448,32 @@ Internal retries still produce exactly 1 receipt per action attempt, containing 
 Breaker rejections also produce receipts, with `policyDecision: allow` and `errorCode: upstream_unavailable`.
 Receipt encoding is unchanged. Transport failures return a fixed message without upstream error text.
 Server logs contain structured failure diagnostics, never request headers or raw error strings.
+
+### Response limits and SSE
+
+Buffered responses never truncate silently. The gateway reads at most `max_response_bytes + 1` bytes.
+Oversize responses return HTTP 502 with code `upstream_response_too_large`.
+The fixed message is `upstream response exceeds configured limit`.
+The receipt records status 502 and that error code. The upstream body closes without an unbounded drain.
+JSON responses keep the `body` field. Other responses keep `body_text`.
+
+SSE pass-through requires an action with `stream: true` and an agent request accepting `text/event-stream`.
+The upstream must return HTTP 2xx with `Content-Type: text/event-stream`.
+Otherwise, the normal buffered path applies, including `max_response_bytes`.
+Successful streams return HTTP 200 without an `ActResponse` envelope.
+The gateway commits 1 receipt before sending headers or stream bytes.
+That receipt records status 200 and policy `allow`. It attests upstream acceptance, not stream completion.
+Receipt failure returns HTTP 500 with `receipt_failed`, without exposing stream bytes.
+
+`request_timeout` bounds streaming dispatch and retries. Its deadline lifts after qualifying upstream headers.
+Caller deadlines still apply. Streams use `max_stream_bytes` and `stream_idle_timeout` instead of the buffered body limit.
+Blank-line event boundaries reset the idle timeout. Partial event bytes don't reset it.
+Limit breaches terminate the stream and close upstream. HTTP status cannot change after streaming starts.
+Client disconnects also close upstream.
+Server logs record the final SHA-256 digest, byte count, and termination reason.
+The digest covers bytes accepted by downstream writes. It isn't part of the signed receipt.
+
+See [registry response settings](docs/registry.md) and the [v2 stream digest proposal](docs/spec/proposals/receipt-stream-digest.md).
 
 ## Tech Stack
 

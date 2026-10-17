@@ -593,16 +593,21 @@ func TestBuildURL(t *testing.T) {
 		{"no params", "https://api.example.com", "/users", ``, "https://api.example.com/users"},
 		{"path params", "https://api.example.com", "/repos/{owner}/{repo}", `{"owner":"octocat","repo":"hello"}`, "https://api.example.com/repos/octocat/hello"},
 		{"trailing slash", "https://api.example.com/", "/users", ``, "https://api.example.com/users"},
+		{"null", "https://api.example.com", "/users/{id}", `null`, "https://api.example.com/users/{id}"},
+		{"numeric text", "https://api.example.com", "/users/{id}/{rate}", `{"id":9007199254740993,"rate":1.00e+2}`, "https://api.example.com/users/9007199254740993/1.00e+2"},
+		{"unicode and bool", "https://api.example.com", "/{name}/{flag}/{name}", `{"name":"😀","flag":true}`, "https://api.example.com/😀/true/😀"},
+		{"null value", "https://api.example.com", "/{id}", `{"id":null}`, "https://api.example.com/<nil>"},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := buildURL(tc.base, tc.path, json.RawMessage(tc.params))
+			params, _, err := receipt.ParseAndDigestParams([]byte(tc.params))
 			if err != nil {
-				t.Fatalf("buildURL: %v", err)
+				t.Fatal(err)
 			}
+			got := buildURL(tc.base, tc.path, params)
 			if got != tc.want {
 				t.Fatalf("got %s, want %s", got, tc.want)
 			}
