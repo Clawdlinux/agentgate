@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/auth"
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
 	upstreamclient "github.com/Clawdlinux/agentgate/internal/upstream"
@@ -56,10 +57,11 @@ type AgentAuthorizer interface {
 	Validate(ctx context.Context, plaintext string) (*auth.AgentKey, error)
 }
 
-// RequestLimiter applies token buckets before authorization work and semaphore slots before upstream dispatch.
-// Zero delay means admission succeeded. Acquire returns an idempotent release function on success.
+// RequestLimiter charges keys before scope checks, then charges authorized tenants and services.
+// Successful permits must be committed or canceled. Acquire returns an idempotent slot release function on success.
 type RequestLimiter interface {
-	Check(agentKeyID, tenant, service string) time.Duration
+	CheckKey(agentKeyID string) (*ratelimit.Permit, time.Duration)
+	CheckTenant(agentKeyID, tenant, service string) (*ratelimit.Permit, time.Duration)
 	Acquire(tenant string) (release func(), retryAfter time.Duration)
 }
 
@@ -202,6 +204,9 @@ type attempt struct {
 	delegationToken []byte   // raw, not yet verified; set by prepareAttempt, verified by executeAttempt
 	delegationChain []string // set by executeAttempt once delegationToken verifies; empty for a direct grant (DELG-04)
 	releaseSlot     func()
+	keyPermit       *ratelimit.Permit
+	tenantPermit    *ratelimit.Permit
+	tenantID        string
 }
 
 // immediateResponse is written with no receipt: the request never reached
@@ -239,10 +244,14 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 	if _, ok := w.(http.Flusher); !ok {
 		att.acceptSSE = false
 	}
+	defer func() {
+		att.keyPermit.Commit()
+		att.tenantPermit.Commit()
+		if att.releaseSlot != nil {
+			att.releaseSlot()
+		}
+	}()
 	out := s.executeAttempt(r.Context(), att)
-	if att.releaseSlot != nil {
-		defer att.releaseSlot()
-	}
 	if out.stream != nil {
 		defer out.stream.close()
 		stopCancel := context.AfterFunc(r.Context(), out.stream.close)
@@ -357,17 +366,31 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 	}, nil
 }
 
-// executeAttempt runs every check and side effect after authentication and
-// shape validation: rate limits, delegation, scope, registry lookup, vault
-// fetch, and upstream dispatch. It never writes to an http.ResponseWriter —
-// every exit is captured in outcome so handleAct can commit a receipt
-// before any response is written.
+// executeAttempt applies policy checks and dispatches upstream after authentication and shape validation.
+// It returns an outcome without writing HTTP responses. handleAct commits a receipt before writing that outcome.
 func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
-	// AgentKey has no organization binding. Tenant identity is the requested human principal.
 	if s.cfg.Limiter != nil {
-		if retry := s.cfg.Limiter.Check(att.agentKey.ID, att.req.OnBehalfOf, att.req.Service); retry > 0 {
+		permit, retry := s.cfg.Limiter.CheckKey(att.agentKey.ID)
+		if retry > 0 {
 			return limitedOutcome("rate_limited", retry)
 		}
+		att.keyPermit = permit
+	}
+	if !att.agentKey.CanAccessService(att.req.Service) || !att.agentKey.CanAccessUser(att.req.OnBehalfOf) {
+		return &outcome{
+			status:         http.StatusForbidden,
+			body:           ErrorResponse{Error: "agent key is not scoped for this service or user", Code: "scope_denied"},
+			policyDecision: "deny",
+			errorCode:      "scope_denied",
+		}
+	}
+	att.tenantID = tenantIdentity(att.agentKey, att.req.OnBehalfOf)
+	if s.cfg.Limiter != nil {
+		permit, retry := s.cfg.Limiter.CheckTenant(att.agentKey.ID, att.tenantID, att.req.Service)
+		if retry > 0 {
+			return limitedOutcome("rate_limited", retry)
+		}
+		att.tenantPermit = permit
 	}
 	if len(att.delegationToken) > 0 {
 		// Verified before registry, vault, or upstream access (DELG-01); a
@@ -391,15 +414,6 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 			}
 		}
 		att.delegationChain = chain
-	}
-
-	if !att.agentKey.CanAccessService(att.req.Service) || !att.agentKey.CanAccessUser(att.req.OnBehalfOf) {
-		return &outcome{
-			status:         http.StatusForbidden,
-			body:           ErrorResponse{Error: "agent key is not scoped for this service or user", Code: "scope_denied"},
-			policyDecision: "deny",
-			errorCode:      "scope_denied",
-		}
 	}
 
 	svc, action, err := s.cfg.Registry.GetAction(att.req.Service, att.req.Action)
@@ -492,13 +506,17 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 	}
 
 	if s.cfg.Limiter != nil {
-		release, retry := s.cfg.Limiter.Acquire(att.req.OnBehalfOf)
+		release, retry := s.cfg.Limiter.Acquire(att.tenantID)
 		if retry > 0 {
+			att.keyPermit.Cancel()
+			att.tenantPermit.Cancel()
 			return limitedOutcome("concurrency_limited", retry)
 		}
 		// handleAct releases after response writing, including streams and receipt failures.
 		att.releaseSlot = release
 	}
+	att.keyPermit.Commit()
+	att.tenantPermit.Commit()
 	resp, err := dispatch(svc.Name, svc.Upstream, upstream, action.Idempotent)
 	if err != nil {
 		status, code, message := http.StatusBadGateway, "upstream_error", "upstream request failed"

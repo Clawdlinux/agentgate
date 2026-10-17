@@ -50,8 +50,9 @@ func TestAct_EarlyRateLimitsAndReceipts(t *testing.T) {
 			}
 			l := ratelimit.New(configs, ratelimit.WithSettings(settings),
 				ratelimit.WithClock(func() time.Time { return now }))
-			l.Check("test-agent", "alice", "github")
+			l.Check("test-agent", "human:alice", "github")
 			srv, _, receipts := testSetup(t)
+			srv.cfg.Authorizer.(*fakeAuthorizer).keys["test-key"].AllowedUsers = []string{"alice"}
 			srv.cfg.Limiter = l
 			verifier := &countingDelegation{}
 			srv.cfg.Delegation = verifier
@@ -60,7 +61,9 @@ func TestAct_EarlyRateLimitsAndReceipts(t *testing.T) {
 			key := "test-key"
 			if scope == "tenant" {
 				key = "second-key"
-				srv.cfg.Authorizer.(*fakeAuthorizer).keys[key] = &auth.AgentKey{ID: "second-agent"}
+				srv.cfg.Authorizer.(*fakeAuthorizer).keys[key] = &auth.AgentKey{
+					ID: "second-agent", AllowedUsers: []string{"alice"}, AllowedServices: []string{"github"},
+				}
 			}
 			w := limitedAct(srv, key, "alice", "github")
 			if w.Code != 429 || w.Header().Get("Retry-After") != "3" ||
@@ -113,11 +116,12 @@ func TestAct_TenantConcurrencyAndSSE(t *testing.T) {
 			defer up.Close()
 			defer close(finish)
 			srv, receipts := bodyGateway(t, up.URL, "{}", stream)
+			srv.cfg.Authorizer.(*fakeAuthorizer).keys["test-key"].AllowedUsers = []string{"user-1"}
 			now := time.Unix(1000, 0)
 			srv.cfg.Limiter = ratelimit.New(nil, ratelimit.WithSettings(ratelimit.Settings{TenantMaxInflight: 1}),
 				ratelimit.WithClock(func() time.Time { return now }))
 			srv.cfg.Authorizer.(*fakeAuthorizer).keys["second-key"] = &auth.AgentKey{
-				ID: "second-agent", AllowedServices: []string{"*"}, AllowedUsers: []string{"*"},
+				ID: "second-agent", AllowedServices: []string{"*"}, AllowedUsers: []string{"user-1"},
 			}
 			firstDone := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +183,7 @@ func TestAct_TenantConcurrencyAndSSE(t *testing.T) {
 			if first.resp.StatusCode != 200 {
 				t.Fatalf("first status = %d", first.resp.StatusCode)
 			}
-			release, delay := srv.cfg.Limiter.Acquire("user-1")
+			release, delay := srv.cfg.Limiter.Acquire("human:user-1")
 			if delay != 0 {
 				t.Fatal("request completion did not release the tenant slot")
 			}
@@ -217,7 +221,8 @@ func TestAct_ConcurrencyReleaseOnFailures(t *testing.T) {
 			if w.Code != 500 && w.Code != 502 {
 				t.Fatalf("status = %d", w.Code)
 			}
-			release, delay := srv.cfg.Limiter.Acquire("user-1")
+			key := srv.cfg.Authorizer.(*fakeAuthorizer).keys["test-key"]
+			release, delay := srv.cfg.Limiter.Acquire(tenantIdentity(key, "user-1"))
 			if delay != 0 {
 				t.Fatal("failure leaked a concurrency slot")
 			}
@@ -249,12 +254,13 @@ func TestAct_SSEDisconnectReleasesTenantSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if _, delay := srv.cfg.Limiter.Acquire("user-1"); delay == 0 {
+	key := srv.cfg.Authorizer.(*fakeAuthorizer).keys["test-key"]
+	if _, delay := srv.cfg.Limiter.Acquire(tenantIdentity(key, "user-1")); delay == 0 {
 		t.Fatal("stream should hold the tenant slot")
 	}
 	cancel()
 	awaitSignal(t, done)
-	release, delay := srv.cfg.Limiter.Acquire("user-1")
+	release, delay := srv.cfg.Limiter.Acquire(tenantIdentity(key, "user-1"))
 	if delay != 0 {
 		t.Fatal("disconnect leaked the tenant slot")
 	}

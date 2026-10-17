@@ -122,10 +122,12 @@ type entry struct {
 	bucket   *rate.Limiter
 	slots    chan struct{}
 	lastUsed time.Time
+	credits  float64
+	pending  int
 }
 
 // Limiter shares a bounded LRU across key, tenant, and key-service buckets.
-// Active semaphores and buckets that haven't refilled are never evicted.
+// Pending permits and active semaphores pin their entries. Depleted buckets also remain cached.
 type Limiter struct {
 	mu         sync.Mutex
 	configs    map[string]Config
@@ -166,71 +168,34 @@ func New(configs map[string]Config, options ...Option) *Limiter {
 // Allow preserves the standalone middleware's per-key, per-service contract.
 // Gateway admission uses Check and Acquire instead.
 func (l *Limiter) Allow(agentKeyID, service string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
 	service = strings.ToLower(service)
 	cfg, ok := l.configs[service]
 	if !ok || cfg.Rate() == rate.Inf {
 		return true
 	}
-	e := l.get(bucketKey{scope: serviceScope, id: agentKeyID, service: service}, cfg.Rate(), cfg.BurstSize(), now)
-	if e == nil {
-		return false
-	}
-	reservation := e.bucket.ReserveN(now, 1)
-	if reservation.DelayFrom(now) > 0 {
-		reservation.CancelAt(now)
-		return false
-	}
-	return true
+	permit, retry := l.check([]bucketSpec{{
+		bucketKey{scope: serviceScope, id: agentKeyID, service: service}, cfg.Rate(), cfg.BurstSize(),
+	}})
+	permit.Commit()
+	return retry == 0
 }
 
 // Check reserves 1 token in every enabled bucket. Zero means admission succeeded.
 // Rejections cancel all reservations, so retries don't postpone recovery.
+// Gateway admission uses CheckKey and CheckTenant around scope validation.
 func (l *Limiter) Check(agentKeyID, tenant, service string) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	service = strings.ToLower(service)
-	type spec struct {
-		key   bucketKey
-		rps   rate.Limit
-		burst int
-	}
-	specs := []spec{
-		{bucketKey{scope: keyScope, id: agentKeyID}, rate.Limit(l.settings.KeyRPS), l.settings.KeyBurst},
-		{bucketKey{scope: tenantScope, id: tenant}, rate.Limit(l.settings.TenantRPS), l.settings.TenantBurst},
-	}
-	if cfg, ok := l.configs[service]; ok && cfg.Rate() != rate.Inf {
-		specs = append(specs, spec{
-			bucketKey{scope: serviceScope, id: agentKeyID, service: service}, cfg.Rate(), cfg.BurstSize(),
-		})
-	}
-	var reservations []*rate.Reservation
-	var retry time.Duration
-	for _, spec := range specs {
-		if spec.rps <= 0 || spec.burst <= 0 {
-			continue
-		}
-		e := l.get(spec.key, spec.rps, spec.burst, now)
-		if e == nil {
-			retry = time.Second
-			break
-		}
-		reservation := e.bucket.ReserveN(now, 1)
-		reservations = append(reservations, reservation)
-		retry = reservation.DelayFrom(now)
-		if retry > 0 {
-			break // Rejected keys must not allocate state for arbitrary tenant names.
-		}
-	}
+	key, retry := l.CheckKey(agentKeyID)
 	if retry > 0 {
-		for _, reservation := range reservations {
-			reservation.CancelAt(now)
-		}
+		return retry
 	}
-	return retry
+	tenantPermit, retry := l.CheckTenant(agentKeyID, tenant, service)
+	if retry > 0 {
+		key.Cancel()
+		return retry
+	}
+	key.Commit()
+	tenantPermit.Commit()
+	return 0
 }
 
 // Acquire takes a tenant semaphore slot without waiting. The release function is idempotent.
@@ -269,10 +234,7 @@ func (l *Limiter) get(key bucketKey, rps rate.Limit, burst int, now time.Time) *
 		for element := l.lru.Back(); element != nil; {
 			previous := element.Prev()
 			e := element.Value.(*entry)
-			if now.Sub(e.lastUsed) < 10*time.Minute {
-				break
-			}
-			if e.evictable(now) {
+			if now.Sub(e.lastUsed) >= 10*time.Minute && e.evictable(now) {
 				l.remove(element)
 			}
 			element = previous
@@ -286,11 +248,19 @@ func (l *Limiter) get(key bucketKey, rps rate.Limit, burst int, now time.Time) *
 		return e
 	}
 	if len(l.entries) >= l.maxEntries {
-		oldest := l.lru.Back()
-		if oldest == nil || !oldest.Value.(*entry).evictable(now) {
-			return nil // Fail closed rather than reset an exhausted bucket or active semaphore.
+		evicted := false
+		for scanned := 0; scanned < min(64, len(l.entries)); scanned++ {
+			oldest := l.lru.Back()
+			if oldest.Value.(*entry).evictable(now) {
+				l.remove(oldest)
+				evicted = true
+				break
+			}
+			l.lru.MoveToFront(oldest)
 		}
-		l.remove(oldest)
+		if !evicted {
+			return nil
+		}
 	}
 	e := &entry{key: key, lastUsed: now}
 	if rps > 0 && burst > 0 {
@@ -304,7 +274,7 @@ func (l *Limiter) get(key bucketKey, rps rate.Limit, burst int, now time.Time) *
 }
 
 func (e *entry) evictable(now time.Time) bool {
-	return len(e.slots) == 0 && (e.bucket == nil || e.bucket.TokensAt(now) >= float64(e.bucket.Burst()))
+	return e.pending == 0 && len(e.slots) == 0 && (e.bucket == nil || e.balance(now) >= float64(e.bucket.Burst()))
 }
 
 func (l *Limiter) remove(element *list.Element) {

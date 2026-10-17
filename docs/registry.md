@@ -6,7 +6,10 @@ Streaming permission belongs on each action.
 ## Rate limits
 
 Optional `rate_limit` settings apply per API key and service.
-They combine with the gateway's per-key and per-human-principal buckets.
+They combine with the gateway's per-key and per-tenant buckets.
+Explicitly scoped keys share human principal tenants. Wildcard keys use key-scoped tenants.
+Large scope lists use a key fallback beyond the first 63 principals.
+See [request admission](../README.md#request-admission) for identity bounds and startup validation.
 The gateway loads them from the same registry YAML as actions.
 The separate `configs/agentgate.yaml` example isn't loaded by the gateway.
 Restart the gateway after changing these settings.
@@ -29,6 +32,7 @@ Absent or zero rates disable the service bucket. Omitted or zero `burst` selects
 Negative bursts and conflicting rates fail registry loading.
 Rate rejection returns HTTP 429 with `rate_limited` and a whole-second `Retry-After` header.
 The gateway commits its receipt before sending that response.
+Scope checks run before service and tenant buckets. Concurrency denials refund all token charges.
 
 ## Response settings
 

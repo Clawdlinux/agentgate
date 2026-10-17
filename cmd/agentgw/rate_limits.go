@@ -42,5 +42,11 @@ func loadRateLimits() (ratelimit.Settings, error) {
 			*field.target = parsed
 		}
 	}
+	tenantEnabled := (settings.TenantRPS > 0 && settings.TenantBurst > 0) || settings.TenantMaxInflight > 0
+	if tenantEnabled && (settings.KeyRPS == 0 || settings.KeyBurst == 0) {
+		return ratelimit.Settings{}, fmt.Errorf(
+			"AGENTGATE_RATE_KEY_RPS and AGENTGATE_RATE_KEY_BURST must be positive while tenant admission is enabled",
+		)
+	}
 	return settings, nil
 }

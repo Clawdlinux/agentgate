@@ -315,11 +315,11 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
-| `AGENTGATE_RATE_KEY_RPS` | Requests per second per API key ID. Default `20`; `0` disables this bucket. | No |
-| `AGENTGATE_RATE_KEY_BURST` | Per-key token bucket burst. Default `40`; `0` disables this bucket. | No |
-| `AGENTGATE_RATE_TENANT_RPS` | Requests per second per human principal. Default `100`; `0` disables this bucket. | No |
+| `AGENTGATE_RATE_KEY_RPS` | Requests per second per API key ID. Default `20`. Zero requires tenant admission disabled. | No |
+| `AGENTGATE_RATE_KEY_BURST` | Per-key token bucket burst. Default `40`. Zero requires tenant admission disabled. | No |
+| `AGENTGATE_RATE_TENANT_RPS` | Requests per second per tenant. Default `100`; `0` disables this bucket. | No |
 | `AGENTGATE_RATE_TENANT_BURST` | Per-tenant token bucket burst. Default `200`; `0` disables this bucket. | No |
-| `AGENTGATE_TENANT_MAX_INFLIGHT` | In-flight upstream requests per human principal. Default `32`; `0` disables this cap. | No |
+| `AGENTGATE_TENANT_MAX_INFLIGHT` | In-flight upstream requests per tenant. Default `32`; `0` disables this cap. | No |
 | `AGENTGATE_BISCUIT_MAX_DURATION` | Go duration per Biscuit Datalog world run. Default `250ms`; range `1ms` through `5s`, inclusive. Invalid values stop startup. | No |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
@@ -340,32 +340,45 @@ Revoked rows never enter legacy bcrypt scans.
 #### Request admission
 
 API keys have no organization ID. The organization store binds admins, not agent keys.
-Tenant identity is `on_behalf_of`, the requested human principal.
-Different keys acting for that principal share its rate bucket and concurrency cap.
+For explicitly scoped keys, tenant identity is the authorized `on_behalf_of` principal.
+Such keys share that principal's rate bucket and concurrency cap.
 Each key's bucket spans services and human principals.
+Wildcard keys allowing `"*"` use 1 key-scoped tenant for every principal.
+Different wildcard keys don't share human quotas.
+Each key selects at most 64 tenant identities from its fixed scope list.
+When the list exceeds 64 entries, only the first 63 retain shared human identity.
+The remaining principals share 1 key-scoped fallback tenant.
+Human and fallback identities use separate namespaces. No per-key tenant-tracking map is needed.
 
 Rate settings accept finite, non-negative numbers. Bursts and concurrency caps require integers.
 Invalid environment values stop startup. Either zero rate or zero burst disables that bucket.
+Both key settings must stay positive while tenant rate limiting or tenant concurrency is enabled.
 Per-service limits are optional. Set `rate_limit` under a service in the loaded registry YAML.
 They apply per API key and service, alongside the global limits.
 See [registry rate limits](docs/registry.md#rate-limits) for YAML examples.
 
-Token buckets run after API key authentication and body validation, before delegation verification or vault access.
+The key bucket runs after API key authentication and body validation.
+In-memory service and principal scope checks run next.
+Scope denials consume only key tokens. Their receipts retain `scope_denied`.
+Tenant and service buckets run after scope checks, before delegation verification or vault access.
 Rate denials return HTTP 429 with `rate_limited`.
 `Retry-After` rounds the reservation delay up to whole seconds, with a minimum of 1.
 Concurrency admission runs immediately before upstream dispatch.
 Full tenants return HTTP 429 with `concurrency_limited` and `Retry-After: 1`.
+Concurrency rejection refunds the key, tenant, and service charges without losing elapsed refill.
 Slots remain held through response completion, including SSE streams and receipt commits.
-Failures, disconnects, and stream termination release them.
+Failures, disconnects, stream termination, and dispatch panics release them.
 Every authenticated, schema-valid attempt still commits a receipt before its response, including admission denials.
 Both admission errors record policy `rate_limited`. Receipt failures return `receipt_failed` instead.
 
 Admission state is process-local. Replicas don't share quotas.
 The combined bucket and semaphore cache holds at most 100000 entries.
 Requests trigger idle sweeps at most once per minute. Entries idle for 10 minutes become eviction candidates.
-Only full buckets without in-flight requests can be evicted. Slow buckets retain their quota until fully refilled.
-At capacity, a full, inactive LRU entry can be replaced.
-If that entry cannot be evicted, admission fails closed with HTTP 429 and `Retry-After: 1`.
+Only full buckets without pending permits or in-flight requests can be evicted.
+Slow buckets retain their quota until fully refilled.
+At capacity, admission scans up to 64 entries from the LRU tail.
+Pinned or depleted entries move to the front. The first evictable entry is replaced.
+If none qualifies, admission fails closed with HTTP 429 and `Retry-After: 1`.
 Restart the gateway after changing admission settings or service YAML.
 
 #### Biscuit token security caps

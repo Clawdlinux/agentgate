@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/auth"
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
 	"github.com/Clawdlinux/agentgate/internal/vault"
@@ -294,7 +295,13 @@ func TestAct_RateLimited(t *testing.T) {
 
 type denyAllLimiter struct{}
 
-func (denyAllLimiter) Check(string, string, string) time.Duration { return time.Second }
+func (denyAllLimiter) CheckKey(string) (*ratelimit.Permit, time.Duration) {
+	return nil, time.Second
+}
+
+func (denyAllLimiter) CheckTenant(string, string, string) (*ratelimit.Permit, time.Duration) {
+	return nil, time.Second
+}
 
 func (denyAllLimiter) Acquire(string) (func(), time.Duration) { return func() {}, 0 }
 
