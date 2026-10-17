@@ -296,6 +296,7 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 | `AGENTGATE_VAULT_KEY` | 32-byte vault key. Also derives receipt encryption keys and the API-key HMAC pepper. | Yes |
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
+| `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
 | `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google OAuth credentials, requesting only the narrow `gmail.labels` scope | For Google Workspace OAuth |
@@ -303,7 +304,8 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 
 Agent API keys are bootstrapped on first boot and logged once. There is no environment variable for a pre-supplied key.
 SQLite stores a public ID and a peppered HMAC-SHA256, never the secret. Use `POST /admin/keys` to create more.
-Legacy `ag_live_` rows keep their bcrypt hashes until you replace and revoke them.
+Legacy `ag_live_` rows keep their bcrypt hashes. Successful validation adds an indexed HMAC without changing the presented key.
+Revoked rows never enter legacy bcrypt scans.
 
 ### Service Configs
 

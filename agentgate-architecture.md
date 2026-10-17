@@ -126,6 +126,7 @@ CREATE TABLE agent_keys (
     key_hash TEXT NOT NULL,
     key_id TEXT,
     key_hmac BLOB,
+    legacy_lookup BLOB,
     allowed_services TEXT NOT NULL, -- JSON array
     allowed_users TEXT NOT NULL,    -- JSON array or "*"
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -133,6 +134,7 @@ CREATE TABLE agent_keys (
 );
 
 CREATE UNIQUE INDEX idx_agent_keys_key_id ON agent_keys(key_id);
+CREATE UNIQUE INDEX idx_agent_keys_legacy_lookup ON agent_keys(legacy_lookup);
 
 -- OAuth tokens (encrypted)
 CREATE TABLE tokens (

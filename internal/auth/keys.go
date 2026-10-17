@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -59,17 +60,16 @@ func (k *AgentKey) CanAccessUser(userID string) bool {
 
 // KeyStore manages agent API keys in SQLite.
 type KeyStore struct {
-	db            keyDatabase
-	pepper        []byte
-	compareLegacy func([]byte, []byte) error
-	now           func() time.Time
-	// Revocation excludes validations until the database and cache agree.
-	revocationMu sync.RWMutex
-	cacheMu      sync.Mutex
-	cache        map[[sha256.Size]byte]*list.Element
-	lru          *list.List
-	cacheTTL     time.Duration
-	cacheSize    int
+	db              keyDatabase
+	pepper          []byte
+	compareLegacy   func([]byte, []byte) error
+	now             func() time.Time
+	cacheMu         sync.Mutex
+	cacheGeneration uint64
+	cache           map[[sha256.Size]byte]*list.Element
+	lru             *list.List
+	cacheTTL        time.Duration
+	cacheSize       int
 }
 
 type keyDatabase interface {
@@ -195,13 +195,11 @@ func (s *KeyStore) Validate(ctx context.Context, plaintext string) (*AgentKey, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.revocationMu.RLock()
-	defer s.revocationMu.RUnlock()
 	digest := sha256.Sum256([]byte(plaintext))
-	if key := s.cached(digest); key != nil {
+	key, generation := s.cached(digest)
+	if key != nil {
 		return key, nil
 	}
-	var key *AgentKey
 	var err error
 	if modern {
 		key, err = s.validateHMAC(ctx, id, secret[:])
@@ -211,7 +209,7 @@ func (s *KeyStore) Validate(ctx context.Context, plaintext string) (*AgentKey, e
 	if err != nil {
 		return nil, err
 	}
-	s.cacheKey(digest, key)
+	s.cacheKey(digest, key, generation)
 	return key, nil
 }
 
@@ -246,45 +244,110 @@ func (s *KeyStore) validateHMAC(ctx context.Context, id string, secret []byte) (
 	return &key, nil
 }
 
-var warnedLegacyKeys sync.Map
+var (
+	warnedLegacyKeys      sync.Map
+	legacyValidationSlots = make(chan struct{}, 2)
+	legacySaturationLogAt atomic.Int64
+)
 
 func (s *KeyStore) validateLegacy(ctx context.Context, plaintext string) (*AgentKey, error) {
+	select {
+	case legacyValidationSlots <- struct{}{}:
+		defer func() { <-legacyValidationSlots }()
+	default:
+		now := time.Now().UnixNano()
+		next := legacySaturationLogAt.Load()
+		if now >= next && legacySaturationLogAt.CompareAndSwap(next, now+int64(time.Minute)) {
+			slog.Debug("legacy API key validation capacity reached")
+		}
+		return nil, ErrKeyNotFound
+	}
+
+	lookup := s.keyHMAC([]byte(plaintext))
+	var key AgentKey
+	var servicesJSON, usersJSON string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id, name, allowed_services, allowed_users, created_at FROM agent_keys WHERE legacy_lookup = ? AND key_id IS NULL AND revoked_at IS NULL",
+		lookup,
+	).Scan(&key.ID, &key.Name, &servicesJSON, &usersJSON, &key.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		found, err := s.scanLegacy(ctx, plaintext)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.db.ExecContext(ctx,
+			"UPDATE agent_keys SET legacy_lookup = ? WHERE id = ? AND revoked_at IS NULL", lookup, found.ID)
+		if err != nil {
+			return nil, fmt.Errorf("auth: upgrade legacy key: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("auth: upgrade legacy result: %w", err)
+		}
+		if affected == 0 {
+			return nil, ErrKeyNotFound
+		}
+		key = *found
+	} else if err != nil {
+		return nil, fmt.Errorf("auth: lookup legacy key: %w", err)
+	} else if err := decodePermissions(&key, servicesJSON, usersJSON); err != nil {
+		return nil, err
+	}
+	if _, loaded := warnedLegacyKeys.LoadOrStore(key.ID, struct{}{}); !loaded {
+		slog.Warn("deprecated legacy API key; replace with an agk_ key", "key_id", key.ID)
+	}
+	return &key, nil
+}
+
+type legacyCandidate struct {
+	key          AgentKey
+	servicesJSON string
+	usersJSON    string
+}
+
+func (s *KeyStore) legacyCandidates(ctx context.Context) ([]legacyCandidate, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, name, key_hash, allowed_services, allowed_users, created_at, revoked_at FROM agent_keys WHERE key_id IS NULL",
+		"SELECT id, name, key_hash, allowed_services, allowed_users, created_at FROM agent_keys WHERE key_id IS NULL AND legacy_lookup IS NULL AND revoked_at IS NULL",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("auth: query keys: %w", err)
 	}
 	defer rows.Close()
 
+	var candidates []legacyCandidate
 	for rows.Next() {
-		var key AgentKey
-		var servicesJSON, usersJSON string
-		var revokedAt sql.NullTime
-
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &servicesJSON, &usersJSON, &key.CreatedAt, &revokedAt); err != nil {
+		var candidate legacyCandidate
+		key := &candidate.key
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &candidate.servicesJSON, &candidate.usersJSON, &key.CreatedAt); err != nil {
 			return nil, fmt.Errorf("auth: scan legacy key: %w", err)
 		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth: read legacy keys: %w", err)
+	}
+	return candidates, nil
+}
 
+func (s *KeyStore) scanLegacy(ctx context.Context, plaintext string) (*AgentKey, error) {
+	// Release the database connection before bcrypt, so revocation can proceed.
+	candidates, err := s.legacyCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		key := candidate.key
 		if s.compareLegacy([]byte(key.KeyHash), []byte(plaintext)) != nil {
 			continue
 		}
-
-		if _, loaded := warnedLegacyKeys.LoadOrStore(key.ID, struct{}{}); !loaded {
-			slog.Warn("deprecated legacy API key; replace with an agk_ key", "key_id", key.ID)
-		}
-		if revokedAt.Valid {
-			return nil, ErrKeyRevoked
-		}
-
-		if err := decodePermissions(&key, servicesJSON, usersJSON); err != nil {
+		if err := decodePermissions(&key, candidate.servicesJSON, candidate.usersJSON); err != nil {
 			return nil, err
 		}
 		key.KeyHash = ""
 		return &key, nil
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("auth: read legacy keys: %w", err)
 	}
 	return nil, ErrKeyNotFound
 }
@@ -340,29 +403,32 @@ func cloneKey(key *AgentKey) *AgentKey {
 	return &clone
 }
 
-func (s *KeyStore) cached(digest [sha256.Size]byte) *AgentKey {
+func (s *KeyStore) cached(digest [sha256.Size]byte) (*AgentKey, uint64) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	entry := s.cache[digest]
 	if entry == nil {
-		return nil
+		return nil, s.cacheGeneration
 	}
 	cached := entry.Value.(*cachedKey)
 	if !s.now().Before(cached.expiresAt) {
 		s.lru.Remove(entry)
 		delete(s.cache, digest)
-		return nil
+		return nil, s.cacheGeneration
 	}
 	s.lru.MoveToFront(entry)
-	return cloneKey(&cached.key)
+	return cloneKey(&cached.key), s.cacheGeneration
 }
 
-func (s *KeyStore) cacheKey(digest [sha256.Size]byte, key *AgentKey) {
+func (s *KeyStore) cacheKey(digest [sha256.Size]byte, key *AgentKey, generation uint64) {
 	if s.cacheSize == 0 || s.cacheTTL == 0 {
 		return
 	}
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
+	if generation != s.cacheGeneration {
+		return
+	}
 	if entry := s.cache[digest]; entry != nil {
 		s.lru.Remove(entry)
 	}
@@ -389,8 +455,6 @@ func (s *KeyStore) Count(ctx context.Context) (int, error) {
 
 // Revoke marks a key as revoked.
 func (s *KeyStore) Revoke(ctx context.Context, keyID string) error {
-	s.revocationMu.Lock()
-	defer s.revocationMu.Unlock()
 	result, err := s.db.ExecContext(ctx,
 		"UPDATE agent_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL",
 		keyID,
@@ -399,6 +463,7 @@ func (s *KeyStore) Revoke(ctx context.Context, keyID string) error {
 		return fmt.Errorf("auth: revoke: %w", err)
 	}
 	s.cacheMu.Lock()
+	s.cacheGeneration++
 	for digest, entry := range s.cache {
 		if entry.Value.(*cachedKey).key.ID == keyID {
 			s.lru.Remove(entry)

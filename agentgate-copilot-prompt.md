@@ -356,6 +356,7 @@ Create `internal/auth/`, `internal/oauth/`, `internal/admin/` packages.
 - Generate API key: `agk_<keyid>_<secret>`. Lowercase hex encodes 16 ID bytes and 32 secret bytes.
 - Store HMAC-SHA256 with a pepper derived from the vault key through HKDF.
 - Migration 005 adds nullable `key_id` and `key_hmac` columns, plus a unique index on `key_id`.
+- Migration 006 adds indexed `legacy_lookup`. Successful legacy validations persist a full-key HMAC there.
 - `NewKeyStore(db, pepper, options...)` configures the database and verified-key LRU cache.
 - `Create(ctx, name, allowedServices, allowedUsers) (key *AgentKey, plaintext string, error)`
 - `Validate(ctx, plaintext string) (*AgentKey, error)` performs 1 indexed lookup and an HMAC comparison.

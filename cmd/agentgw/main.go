@@ -96,7 +96,12 @@ func main() {
 		logger.Error("derive API key pepper", "error", err)
 		os.Exit(1)
 	}
-	keyStore, err := auth.NewKeyStore(database, pepper)
+	cacheTTL, err := loadAPIKeyCacheTTL()
+	if err != nil {
+		logger.Error("load API key cache TTL", "error", err)
+		os.Exit(1)
+	}
+	keyStore, err := auth.NewKeyStore(database, pepper, auth.WithCacheTTL(cacheTTL))
 	if err != nil {
 		logger.Error("init API key store", "error", err)
 		os.Exit(1)
@@ -225,11 +230,21 @@ func main() {
 	}
 }
 
+// loadAPIKeyCacheTTL returns the optional cache duration or its default.
+func loadAPIKeyCacheTTL() (time.Duration, error) {
+	value, set := os.LookupEnv("AGENTGATE_API_KEY_CACHE_TTL")
+	if !set {
+		return 30 * time.Second, nil
+	}
+	ttl, err := time.ParseDuration(value)
+	if err != nil || ttl < 0 {
+		return 0, fmt.Errorf("AGENTGATE_API_KEY_CACHE_TTL must be a non-negative duration")
+	}
+	return ttl, nil
+}
+
 // loadMasterKey reads the 32-byte master secret for the vault.
 // It also derives the signer's encryption key and the API-key HMAC pepper.
-// AGENTGATE_VAULT_KEY is the name docker-compose.yaml and .env.example
-// already document; the previous VAULT_ENCRYPTION_KEY read in this command
-// never matched either file.
 func loadMasterKey() ([]byte, error) {
 	envKey := os.Getenv("AGENTGATE_VAULT_KEY")
 	if len(envKey) != 32 {

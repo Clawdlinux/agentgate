@@ -374,7 +374,7 @@ func TestKeyStoreLegacy(t *testing.T) {
 	if err := store.Revoke(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Validate(t.Context(), plaintext); !errors.Is(err, ErrKeyRevoked) {
+	if _, err := store.Validate(t.Context(), plaintext); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("legacy revoke: %v", err)
 	}
 }

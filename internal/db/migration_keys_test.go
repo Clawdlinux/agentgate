@@ -18,7 +18,7 @@ func TestKeyLookupMigrationUpgradesLegacyAndIsRepeatable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "005") {
+		if entry.Name() >= "005" {
 			continue
 		}
 		data, err := migrations.ReadFile("migrations/" + entry.Name())
