@@ -75,7 +75,7 @@ func testSetup(t *testing.T) (*Server, *vault.MemoryStore, *fakeReceipts) {
 	_ = reg.LoadBytes([]byte(`
 services:
   github:
-    base_url: PLACEHOLDER
+    base_url: https://api.github.com
     auth:
       type: oauth2
     actions:
@@ -90,7 +90,7 @@ services:
           repo: string
           title: string
   stripe:
-    base_url: PLACEHOLDER
+    base_url: https://api.stripe.com
     auth:
       type: bearer
     actions:
@@ -593,6 +593,7 @@ func TestBuildURL(t *testing.T) {
 		{"no params", "https://api.example.com", "/users", ``, "https://api.example.com/users"},
 		{"path params", "https://api.example.com", "/repos/{owner}/{repo}", `{"owner":"octocat","repo":"hello"}`, "https://api.example.com/repos/octocat/hello"},
 		{"trailing slash", "https://api.example.com/", "/users", ``, "https://api.example.com/users"},
+		{"static query", "https://api.example.com", "/repos/{repo}?sort=updated&limit=10", `{"repo":"hello"}`, "https://api.example.com/repos/hello?sort=updated&limit=10"},
 		{"null without placeholders", "https://api.example.com", "/users", `null`, "https://api.example.com/users"},
 		{"numeric text", "https://api.example.com", "/users/{id}/{rate}", `{"id":9007199254740993,"rate":1.00e+2}`, "https://api.example.com/users/9007199254740993/1.00e+2"},
 		{"unicode and bool", "https://api.example.com", "/{name}/{flag}/{name}", `{"name":"😀","flag":true}`, "https://api.example.com/%F0%9F%98%80/true/%F0%9F%98%80"},

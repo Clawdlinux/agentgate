@@ -406,6 +406,24 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 
+	upstreamURL, err := buildURL(svc.BaseURL, action.Path, att.params)
+	if err != nil {
+		if !errors.Is(err, errInvalidPathParams) {
+			return &outcome{
+				status:         http.StatusInternalServerError,
+				body:           ErrorResponse{Error: "failed to build upstream request", Code: "internal"},
+				policyDecision: "allow",
+				errorCode:      "internal",
+			}
+		}
+		return &outcome{
+			status:         http.StatusBadRequest,
+			body:           ErrorResponse{Error: "invalid params", Code: "bad_request"},
+			policyDecision: "deny",
+			errorCode:      "bad_request",
+		}
+	}
+
 	tok, err := s.cfg.Vault.Get(att.req.OnBehalfOf, att.req.Service)
 	if err != nil {
 		return &outcome{
@@ -435,16 +453,6 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 			body:           ErrorResponse{Error: "token expired — user must re-authenticate", Code: "token_expired"},
 			policyDecision: "allow",
 			errorCode:      "token_expired",
-		}
-	}
-
-	upstreamURL, err := buildURL(svc.BaseURL, action.Path, att.params)
-	if err != nil {
-		return &outcome{
-			status:         http.StatusBadRequest,
-			body:           ErrorResponse{Error: "invalid params", Code: "bad_request"},
-			policyDecision: "deny",
-			errorCode:      "bad_request",
 		}
 	}
 
@@ -580,6 +588,9 @@ func buildURL(baseURL, pathTemplate string, params map[string]any) (string, erro
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme == "" || base.Host == "" {
 		return "", errors.New("invalid base URL")
+	}
+	if _, query, ok := strings.Cut(pathTemplate, "?"); ok && strings.Contains(query, "{") {
+		return "", errors.New("placeholders are not allowed after '?'")
 	}
 
 	var path strings.Builder

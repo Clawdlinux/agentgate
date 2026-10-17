@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -121,5 +122,48 @@ func TestRegistry_List(t *testing.T) {
 	names := r.List()
 	if !reflect.DeepEqual(names, []string{"github", "stripe"}) {
 		t.Fatalf("list = %v", names)
+	}
+}
+
+func TestRegistryRejectsQueryPlaceholders(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{
+		"/search?q={q}",
+		"/repos/{repo}?fixed=operator-private-value&q={q}",
+		"/search?fixed=operator-private-value#{q}",
+	} {
+		t.Run(path, func(t *testing.T) {
+			r := New()
+			err := r.LoadBytes([]byte(fmt.Sprintf(`
+services:
+  example:
+    base_url: https://api.example.com
+    actions:
+      search:
+        method: GET
+        path: %q
+`, path)))
+			const want = "registry: service example action search: placeholders are not allowed after '?'"
+			if err == nil || err.Error() != want {
+				t.Fatalf("error=%v, want %q", err, want)
+			}
+			if r.Count() != 0 {
+				t.Fatalf("invalid catalog was loaded: %d services", r.Count())
+			}
+		})
+	}
+}
+
+func TestRegistryAllowsStaticQueries(t *testing.T) {
+	t.Parallel()
+	r := New()
+	if err := r.LoadBytes([]byte(`
+services:
+  example:
+    base_url: https://api.example.com
+    actions:
+      search: {method: GET, path: "/repos/{repo}?sort=updated&limit=10"}
+`)); err != nil {
+		t.Fatal(err)
 	}
 }

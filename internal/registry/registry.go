@@ -92,6 +92,11 @@ func (r *Registry) LoadBytes(data []byte) error {
 		if err := svc.Upstream.Validate(); err != nil {
 			return fmt.Errorf("registry: service %s: %w", name, err)
 		}
+		for actionName, action := range svc.Actions {
+			if _, query, ok := strings.Cut(action.Path, "?"); ok && strings.Contains(query, "{") {
+				return fmt.Errorf("registry: service %s action %s: placeholders are not allowed after '?'", name, actionName)
+			}
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

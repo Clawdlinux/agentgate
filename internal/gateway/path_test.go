@@ -11,9 +11,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
+	"github.com/Clawdlinux/agentgate/internal/vault"
 )
 
 func TestBuildURLPathSegments(t *testing.T) {
@@ -51,6 +53,21 @@ func TestBuildURLPathSegments(t *testing.T) {
 			}
 			if want := "https://api.example.com/v1/repos/" + tc.want; got != want {
 				t.Fatalf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestBuildURLRejectsQueryPlaceholders(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/search?q={q}", "/repos/{repo}?q={q}"} {
+		t.Run(path, func(t *testing.T) {
+			got, err := buildURL("https://api.example.com", path, map[string]any{
+				"repo": "hello",
+				"q":    "hello&admin=true+extra",
+			})
+			if err == nil || got != "" {
+				t.Fatalf("query placeholder accepted: %q, error=%v", got, err)
 			}
 		})
 	}
@@ -277,6 +294,115 @@ services:
 				t.Fatal(err)
 			}
 			if draft.StatusCode != 400 || draft.Error != "bad_request" || draft.PolicyDecision != "deny" || draft.ParamsSHA256 != hash {
+				t.Fatalf("unexpected receipt: %+v", draft)
+			}
+		})
+	}
+}
+
+type pathCountingVault struct {
+	vault.Store
+	gets atomic.Int32
+	puts atomic.Int32
+}
+
+func (v *pathCountingVault) Get(userID, service string) (vault.Token, error) {
+	v.gets.Add(1)
+	return v.Store.Get(userID, service)
+}
+
+func (v *pathCountingVault) Put(userID, service string, tok vault.Token) error {
+	v.puts.Add(1)
+	return v.Store.Put(userID, service, tok)
+}
+
+func TestActInvalidPathParamsBeforeVault(t *testing.T) {
+	for _, hasToken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("has_token=%t", hasToken), func(t *testing.T) {
+			srv, store, receipts := testSetup(t)
+			if hasToken {
+				if err := store.Put("user-1", "github", vault.Token{
+					AccessToken:  "expiring-token",
+					RefreshToken: "refresh-token",
+					ExpiresAt:    time.Now().Add(time.Minute),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			counted := &pathCountingVault{Store: store}
+			srv.cfg.Vault = counted
+			var refreshCalls atomic.Int32
+			srv.cfg.Refreshers = map[string]vault.RefreshFunc{
+				"github": func(string) (string, string, time.Duration, error) {
+					refreshCalls.Add(1)
+					return "new-token", "new-refresh", time.Hour, nil
+				},
+			}
+			req := httptest.NewRequest("POST", "/v1/act", strings.NewReader(
+				`{"service":"github","action":"create_issue","on_behalf_of":"user-1","params":{"owner":"octocat","repo":".."}}`))
+			req.Header.Set("Authorization", "Bearer test-key")
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+			var body ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusBadRequest || body.Code != "bad_request" || body.Error != "invalid params" {
+				t.Errorf("status=%d body=%s", w.Code, w.Body)
+			}
+			if counted.gets.Load() != 0 || counted.puts.Load() != 0 || refreshCalls.Load() != 0 {
+				t.Errorf("vault gets=%d puts=%d refresh calls=%d, want all 0",
+					counted.gets.Load(), counted.puts.Load(), refreshCalls.Load())
+			}
+			if receipts.count() != 1 {
+				t.Fatalf("receipts=%d, want 1", receipts.count())
+			}
+			draft := receipts.last()
+			if draft.StatusCode != 400 || draft.Error != "bad_request" || draft.PolicyDecision != "deny" {
+				t.Fatalf("unexpected receipt: %+v", draft)
+			}
+		})
+	}
+}
+
+func TestActInvalidBaseURLIsInternal(t *testing.T) {
+	for _, base := range []string{
+		"https://operator-private-value:private-password@api.example.com/%zz",
+		"/relative-base",
+		"https:opaque-base",
+	} {
+		t.Run(base, func(t *testing.T) {
+			srv, store, receipts := testSetup(t)
+			if err := srv.cfg.Registry.LoadBytes([]byte(fmt.Sprintf(`
+services:
+  github:
+    base_url: %q
+    actions:
+      list_repos: {method: GET, path: /repos}
+`, base))); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Put("user-1", "github", vault.Token{AccessToken: "access-token"}); err != nil {
+				t.Fatal(err)
+			}
+			counted := &pathCountingVault{Store: store}
+			srv.cfg.Vault = counted
+			w := transportAct(t, srv)
+			var body ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusInternalServerError || body.Code != "internal" || body.Error != "failed to build upstream request" {
+				t.Errorf("status=%d body=%s", w.Code, w.Body)
+			}
+			if counted.gets.Load() != 0 || counted.puts.Load() != 0 {
+				t.Errorf("vault gets=%d puts=%d, want both 0", counted.gets.Load(), counted.puts.Load())
+			}
+			if receipts.count() != 1 {
+				t.Fatalf("receipts=%d, want 1", receipts.count())
+			}
+			draft := receipts.last()
+			if draft.StatusCode != 500 || draft.Error != "internal" || draft.PolicyDecision != "allow" {
 				t.Fatalf("unexpected receipt: %+v", draft)
 			}
 		})
