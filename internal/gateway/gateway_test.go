@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/auth"
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
 	"github.com/Clawdlinux/agentgate/internal/vault"
@@ -284,6 +285,9 @@ func TestAct_RateLimited(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", w.Code)
 	}
+	if w.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", w.Header().Get("Retry-After"))
+	}
 	if got := receipts.last().PolicyDecision; got != "rate_limited" {
 		t.Fatalf("policy_decision = %s, want rate_limited", got)
 	}
@@ -291,7 +295,15 @@ func TestAct_RateLimited(t *testing.T) {
 
 type denyAllLimiter struct{}
 
-func (denyAllLimiter) Allow(string, string) bool { return false }
+func (denyAllLimiter) CheckKey(string) (*ratelimit.Permit, time.Duration) {
+	return nil, time.Second
+}
+
+func (denyAllLimiter) CheckTenant(string, string, string) (*ratelimit.Permit, time.Duration) {
+	return nil, time.Second
+}
+
+func (denyAllLimiter) Acquire(string) (func(), time.Duration) { return func() {}, 0 }
 
 func TestAct_NoToken(t *testing.T) {
 	t.Parallel()

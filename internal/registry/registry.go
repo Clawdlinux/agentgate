@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/upstream"
 	"gopkg.in/yaml.v3"
 )
@@ -32,11 +33,12 @@ var ErrActionNotFound = errors.New("registry: action not found")
 
 // Service describes one SaaS API endpoint.
 type Service struct {
-	Name     string            `yaml:"name"`
-	BaseURL  string            `yaml:"base_url"`
-	Auth     AuthCfg           `yaml:"auth"`
-	Actions  map[string]Action `yaml:"actions"`
-	Upstream upstream.Config   `yaml:"upstream,omitempty"`
+	Name      string            `yaml:"name"`
+	BaseURL   string            `yaml:"base_url"`
+	Auth      AuthCfg           `yaml:"auth"`
+	Actions   map[string]Action `yaml:"actions"`
+	Upstream  upstream.Config   `yaml:"upstream,omitempty"`
+	RateLimit *ratelimit.Config `yaml:"rate_limit,omitempty"`
 }
 
 // AuthCfg holds the authentication configuration for a service.
@@ -89,9 +91,15 @@ func (r *Registry) LoadBytes(data []byte) error {
 		return fmt.Errorf("registry: parse: %w", err)
 	}
 	for name, svc := range cfg.Services {
+		if svc.RateLimit != nil {
+			if err := svc.RateLimit.Validate(); err != nil {
+				return fmt.Errorf("registry: service %s: %w", name, err)
+			}
+		}
 		if err := svc.Upstream.Validate(); err != nil {
 			return fmt.Errorf("registry: service %s: %w", name, err)
 		}
+
 		for actionName, action := range svc.Actions {
 			if _, query, ok := strings.Cut(action.Path, "?"); ok && strings.Contains(query, "{") {
 				return fmt.Errorf("registry: service %s action %s: placeholders are not allowed after '?'", name, actionName)
@@ -105,6 +113,19 @@ func (r *Registry) LoadBytes(data []byte) error {
 		r.services[name] = svc
 	}
 	return nil
+}
+
+// RateLimits returns a snapshot for gateway admission at startup.
+func (r *Registry) RateLimits() map[string]ratelimit.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	configs := make(map[string]ratelimit.Config)
+	for name, svc := range r.services {
+		if svc.RateLimit != nil {
+			configs[name] = *svc.RateLimit
+		}
+	}
+	return configs
 }
 
 // Get returns a service by name.

@@ -62,6 +62,11 @@ func main() {
 		logger.Error("load Biscuit limits", "error", err)
 		os.Exit(1)
 	}
+	rateLimits, err := loadRateLimits()
+	if err != nil {
+		logger.Error("load rate limits", "error", err)
+		os.Exit(1)
+	}
 
 	// Load service registry.
 	reg := registry.New()
@@ -141,7 +146,7 @@ func main() {
 
 	ledger := receipt.NewLedger(database, signerStore)
 	defer ledger.Close()
-	limiter := ratelimit.New(nil) // no per-service limits configured yet; Allow() is a pass-through
+	limiter := ratelimit.New(reg.RateLimits(), ratelimit.WithSettings(rateLimits))
 
 	delegationRoot, err := delegation.NewRootStore(database, masterKey)
 	if err != nil {

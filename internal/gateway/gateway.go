@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/auth"
+	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
 	upstreamclient "github.com/Clawdlinux/agentgate/internal/upstream"
@@ -56,11 +57,12 @@ type AgentAuthorizer interface {
 	Validate(ctx context.Context, plaintext string) (*auth.AgentKey, error)
 }
 
-// RequestLimiter reports whether a request for (agentKeyID, service) is
-// currently allowed. Backed by *ratelimit.Limiter in production. A nil
-// Limiter in Config disables rate limiting.
+// RequestLimiter charges keys before scope checks, then charges authorized tenants and services.
+// Successful permits must be committed or canceled. Acquire returns an idempotent slot release function on success.
 type RequestLimiter interface {
-	Allow(agentKeyID, service string) bool
+	CheckKey(agentKeyID string) (*ratelimit.Permit, time.Duration)
+	CheckTenant(agentKeyID, tenant, service string) (*ratelimit.Permit, time.Duration)
+	Acquire(tenant string) (release func(), retryAfter time.Duration)
 }
 
 // DelegationVerifier checks a presented Biscuit delegation token against
@@ -201,6 +203,10 @@ type attempt struct {
 	acceptSSE       bool
 	delegationToken []byte   // raw, not yet verified; set by prepareAttempt, verified by executeAttempt
 	delegationChain []string // set by executeAttempt once delegationToken verifies; empty for a direct grant (DELG-04)
+	releaseSlot     func()
+	keyPermit       *ratelimit.Permit
+	tenantPermit    *ratelimit.Permit
+	tenantID        string
 }
 
 // immediateResponse is written with no receipt: the request never reached
@@ -224,6 +230,7 @@ type outcome struct {
 	policyDecision string // "allow", "deny", or "rate_limited"
 	errorCode      string // stable code; empty means no error
 	stream         *streamResponse
+	retryAfter     time.Duration
 }
 
 func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +244,13 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 	if _, ok := w.(http.Flusher); !ok {
 		att.acceptSSE = false
 	}
+	defer func() {
+		att.keyPermit.Commit()
+		att.tenantPermit.Commit()
+		if att.releaseSlot != nil {
+			att.releaseSlot()
+		}
+	}()
 	out := s.executeAttempt(r.Context(), att)
 	if out.stream != nil {
 		defer out.stream.close()
@@ -293,6 +307,10 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 		s.writeStream(w, r, att, out.stream)
 		return
 	}
+	if out.retryAfter > 0 {
+		seconds := max(int64(1), int64(math.Ceil(out.retryAfter.Seconds())))
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
 	if actResp, ok := out.body.(ActResponse); ok {
 		actResp.LatencyMS = latencyMS
 		out.body = actResp
@@ -348,12 +366,32 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 	}, nil
 }
 
-// executeAttempt runs every check and side effect after authentication and
-// shape validation: delegation, scope, rate limit, registry lookup, vault
-// fetch, and upstream dispatch. It never writes to an http.ResponseWriter —
-// every exit is captured in outcome so handleAct can commit a receipt
-// before any response is written.
+// executeAttempt applies policy checks and dispatches upstream after authentication and shape validation.
+// It returns an outcome without writing HTTP responses. handleAct commits a receipt before writing that outcome.
 func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
+	if s.cfg.Limiter != nil {
+		permit, retry := s.cfg.Limiter.CheckKey(att.agentKey.ID)
+		if retry > 0 {
+			return limitedOutcome("rate_limited", retry)
+		}
+		att.keyPermit = permit
+	}
+	if !att.agentKey.CanAccessService(att.req.Service) || !att.agentKey.CanAccessUser(att.req.OnBehalfOf) {
+		return &outcome{
+			status:         http.StatusForbidden,
+			body:           ErrorResponse{Error: "agent key is not scoped for this service or user", Code: "scope_denied"},
+			policyDecision: "deny",
+			errorCode:      "scope_denied",
+		}
+	}
+	att.tenantID = tenantIdentity(att.agentKey, att.req.OnBehalfOf)
+	if s.cfg.Limiter != nil {
+		permit, retry := s.cfg.Limiter.CheckTenant(att.agentKey.ID, att.tenantID, att.req.Service)
+		if retry > 0 {
+			return limitedOutcome("rate_limited", retry)
+		}
+		att.tenantPermit = permit
+	}
 	if len(att.delegationToken) > 0 {
 		// Verified before registry, vault, or upstream access (DELG-01); a
 		// gateway with no configured verifier fails closed rather than
@@ -376,24 +414,6 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 			}
 		}
 		att.delegationChain = chain
-	}
-
-	if !att.agentKey.CanAccessService(att.req.Service) || !att.agentKey.CanAccessUser(att.req.OnBehalfOf) {
-		return &outcome{
-			status:         http.StatusForbidden,
-			body:           ErrorResponse{Error: "agent key is not scoped for this service or user", Code: "scope_denied"},
-			policyDecision: "deny",
-			errorCode:      "scope_denied",
-		}
-	}
-
-	if s.cfg.Limiter != nil && !s.cfg.Limiter.Allow(att.agentKey.ID, att.req.Service) {
-		return &outcome{
-			status:         http.StatusTooManyRequests,
-			body:           ErrorResponse{Error: "rate limit exceeded", Code: "rate_limited"},
-			policyDecision: "rate_limited",
-			errorCode:      "rate_limited",
-		}
 	}
 
 	svc, action, err := s.cfg.Registry.GetAction(att.req.Service, att.req.Action)
@@ -485,6 +505,18 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		dispatch = s.upstreams.DoStream
 	}
 
+	if s.cfg.Limiter != nil {
+		release, retry := s.cfg.Limiter.Acquire(att.tenantID)
+		if retry > 0 {
+			att.keyPermit.Cancel()
+			att.tenantPermit.Cancel()
+			return limitedOutcome("concurrency_limited", retry)
+		}
+		// handleAct releases after response writing, including streams and receipt failures.
+		att.releaseSlot = release
+	}
+	att.keyPermit.Commit()
+	att.tenantPermit.Commit()
 	resp, err := dispatch(svc.Name, svc.Upstream, upstream, action.Idempotent)
 	if err != nil {
 		status, code, message := http.StatusBadGateway, "upstream_error", "upstream request failed"
@@ -542,6 +574,17 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		status:         resp.StatusCode,
 		body:           ActResponse{Status: resp.StatusCode, BodyText: string(body)},
 		policyDecision: "allow",
+	}
+}
+
+func limitedOutcome(code string, retry time.Duration) *outcome {
+	message := "rate limit exceeded"
+	if code == "concurrency_limited" {
+		message = "tenant concurrency limit exceeded"
+	}
+	return &outcome{
+		status: http.StatusTooManyRequests, body: ErrorResponse{Error: message, Code: code},
+		policyDecision: "rate_limited", errorCode: code, retryAfter: retry,
 	}
 }
 
