@@ -407,6 +407,10 @@ Duration values use Go syntax, such as `100ms` or `10s`.
 Zero values use defaults, except `max_conns_per_host` and `retry.max_retries`.
 Negative values fail registry loading. The retry base delay must not exceed its cap.
 HTTP/2 is enabled. Proxy selection follows `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+Redirects must keep the original scheme and host, including its port. HTTPS downgrades are refused.
+Same-origin redirects allow at most 5 hops. Custom client policies can further restrict redirects, but cannot bypass these checks.
+Origin and hop-limit rejections return a fixed upstream error and still commit 1 receipt.
+They never retry or count as breaker failures.
 An earlier caller deadline wins. Embedded `Config.HTTPClient.Timeout` does not replace the context deadline.
 
 GET, HEAD, and OPTIONS can retry transport errors and HTTP 502, 503, or 504.
@@ -424,9 +428,11 @@ A separate window ceiling caps retries at 20% of requests, or 10 retries when tr
 Retries do not add request credits. An empty bucket returns the last response or transport failure without retrying.
 
 Transport errors and all HTTP 5xx responses count as breaker failures.
+Caller cancellations and caller deadlines do not change the failure count. The pool's own request timeout still counts.
 Other responses reset the consecutive failure count, including HTTP 4xx.
 An open breaker fails fast with HTTP 503 and code `upstream_unavailable`.
 After cooldown, only 1 probe runs. Success closes the breaker. Failure starts another cooldown.
+A caller-canceled probe releases its permit without restarting cooldown. The next caller can probe immediately.
 
 Internal retries still produce exactly 1 receipt per action attempt, containing the final status.
 Breaker rejections also produce receipts, with `policyDecision: allow` and `errorCode: upstream_unavailable`.

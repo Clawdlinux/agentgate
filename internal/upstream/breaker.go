@@ -48,6 +48,17 @@ func (b *breaker) acquire() (uint64, bool) {
 	return b.generation, true
 }
 
+func (b *breaker) release(generation uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if generation != b.generation || b.state != halfOpen {
+		return
+	}
+	// Keep the original cooldown. The next caller can probe immediately.
+	b.state = open
+	b.generation++
+}
+
 func (b *breaker) complete(generation uint64, failed bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

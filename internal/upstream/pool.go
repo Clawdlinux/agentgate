@@ -46,7 +46,7 @@ func (wallClock) Sleep(ctx context.Context, delay time.Duration) error {
 type Options struct {
 	Clock  Clock
 	Jitter func(time.Duration) time.Duration
-	// Client preserves custom redirect policy or test transports. Its Timeout is ignored.
+	// Client preserves test transports and stricter redirect policies. Its Timeout is ignored.
 	Client *http.Client
 }
 
@@ -118,6 +118,7 @@ func (p *Pool) client(service string, cfg Config) *clientState {
 			client.Transport = tr
 		}
 	}
+	client.CheckRedirect = secureRedirectPolicy(client.CheckRedirect)
 	state := &clientState{client: client, transport: tr, config: cfg, breaker: newBreaker(cfg.Breaker, p.options.Clock)}
 	p.clients[service] = state
 	return state
@@ -140,7 +141,8 @@ func (p *Pool) Do(service string, cfg Config, req *http.Request, idempotent bool
 		return nil, err
 	}
 	state := p.client(service, cfg)
-	ctx, cancel := context.WithTimeout(req.Context(), state.config.RequestTimeout)
+	callerCtx := req.Context()
+	ctx, cancel := context.WithTimeout(callerCtx, state.config.RequestTimeout)
 	keepContext := false
 	defer func() {
 		if !keepContext {
@@ -161,6 +163,16 @@ func (p *Pool) Do(service string, cfg Config, req *http.Request, idempotent bool
 			return nil, ErrUnavailable
 		}
 		resp, err := state.client.Do(attempt)
+		if err != nil {
+			if callerErr := callerCtx.Err(); callerErr != nil {
+				state.breaker.release(permit)
+				return nil, callerErr
+			}
+			if errors.Is(err, errRedirectRefused) {
+				state.breaker.release(permit)
+				return nil, err
+			}
+		}
 		state.breaker.complete(permit, err != nil || resp.StatusCode >= 500)
 		if err != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
