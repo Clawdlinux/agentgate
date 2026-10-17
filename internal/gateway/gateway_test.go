@@ -284,6 +284,9 @@ func TestAct_RateLimited(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", w.Code)
 	}
+	if w.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", w.Header().Get("Retry-After"))
+	}
 	if got := receipts.last().PolicyDecision; got != "rate_limited" {
 		t.Fatalf("policy_decision = %s, want rate_limited", got)
 	}
@@ -291,7 +294,9 @@ func TestAct_RateLimited(t *testing.T) {
 
 type denyAllLimiter struct{}
 
-func (denyAllLimiter) Allow(string, string) bool { return false }
+func (denyAllLimiter) Check(string, string, string) time.Duration { return time.Second }
+
+func (denyAllLimiter) Acquire(string) (func(), time.Duration) { return func() {}, 0 }
 
 func TestAct_NoToken(t *testing.T) {
 	t.Parallel()

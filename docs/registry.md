@@ -1,7 +1,36 @@
-# Registry response settings
+# Registry settings
 
 Response limits belong under each service's `upstream` settings.
 Streaming permission belongs on each action.
+
+## Rate limits
+
+Optional `rate_limit` settings apply per API key and service.
+They combine with the gateway's per-key and per-human-principal buckets.
+The gateway loads them from the same registry YAML as actions.
+The separate `configs/agentgate.yaml` example isn't loaded by the gateway.
+Restart the gateway after changing these settings.
+
+```yaml
+services:
+  example:
+    base_url: https://api.example.com
+    auth: {type: bearer}
+    rate_limit:
+      requests_per_second: 25
+      burst: 50
+    actions:
+      list: {method: GET, path: /items}
+```
+
+Use at most 1 positive rate field: `requests_per_second`, `requests_per_minute`, or `requests_per_hour`.
+Rates must be finite and non-negative. Fractional rates are accepted.
+Absent or zero rates disable the service bucket. Omitted or zero `burst` selects 10 tokens.
+Negative bursts and conflicting rates fail registry loading.
+Rate rejection returns HTTP 429 with `rate_limited` and a whole-second `Retry-After` header.
+The gateway commits its receipt before sending that response.
+
+## Response settings
 
 ```yaml
 services:

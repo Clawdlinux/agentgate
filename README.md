@@ -315,6 +315,11 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
+| `AGENTGATE_RATE_KEY_RPS` | Requests per second per API key ID. Default `20`; `0` disables this bucket. | No |
+| `AGENTGATE_RATE_KEY_BURST` | Per-key token bucket burst. Default `40`; `0` disables this bucket. | No |
+| `AGENTGATE_RATE_TENANT_RPS` | Requests per second per human principal. Default `100`; `0` disables this bucket. | No |
+| `AGENTGATE_RATE_TENANT_BURST` | Per-tenant token bucket burst. Default `200`; `0` disables this bucket. | No |
+| `AGENTGATE_TENANT_MAX_INFLIGHT` | In-flight upstream requests per human principal. Default `32`; `0` disables this cap. | No |
 | `AGENTGATE_BISCUIT_MAX_DURATION` | Go duration per Biscuit Datalog world run. Default `250ms`; range `1ms` through `5s`, inclusive. Invalid values stop startup. | No |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
@@ -332,6 +337,37 @@ SQLite stores a public ID and a peppered HMAC-SHA256, never the secret. Use `POS
 Legacy `ag_live_` rows keep their bcrypt hashes. Successful validation adds an indexed HMAC without changing the presented key.
 Revoked rows never enter legacy bcrypt scans.
 
+#### Request admission
+
+API keys have no organization ID. The organization store binds admins, not agent keys.
+Tenant identity is `on_behalf_of`, the requested human principal.
+Different keys acting for that principal share its rate bucket and concurrency cap.
+Each key's bucket spans services and human principals.
+
+Rate settings accept finite, non-negative numbers. Bursts and concurrency caps require integers.
+Invalid environment values stop startup. Either zero rate or zero burst disables that bucket.
+Per-service limits are optional. Set `rate_limit` under a service in the loaded registry YAML.
+They apply per API key and service, alongside the global limits.
+See [registry rate limits](docs/registry.md#rate-limits) for YAML examples.
+
+Token buckets run after API key authentication and body validation, before delegation verification or vault access.
+Rate denials return HTTP 429 with `rate_limited`.
+`Retry-After` rounds the reservation delay up to whole seconds, with a minimum of 1.
+Concurrency admission runs immediately before upstream dispatch.
+Full tenants return HTTP 429 with `concurrency_limited` and `Retry-After: 1`.
+Slots remain held through response completion, including SSE streams and receipt commits.
+Failures, disconnects, and stream termination release them.
+Every authenticated, schema-valid attempt still commits a receipt before its response, including admission denials.
+Both admission errors record policy `rate_limited`. Receipt failures return `receipt_failed` instead.
+
+Admission state is process-local. Replicas don't share quotas.
+The combined bucket and semaphore cache holds at most 100000 entries.
+Requests trigger idle sweeps at most once per minute. Entries idle for 10 minutes become eviction candidates.
+Only full buckets without in-flight requests can be evicted. Slow buckets retain their quota until fully refilled.
+At capacity, a full, inactive LRU entry can be replaced.
+If that entry cannot be evicted, admission fails closed with HTTP 429 and `Retry-After: 1`.
+Restart the gateway after changing admission settings or service YAML.
+
 #### Biscuit token security caps
 
 Tokens are limited to 4096 bytes and 8 attenuation blocks.
@@ -344,7 +380,7 @@ Authority checks follow the same caps.
 
 These checks run before authorizer construction. Rejections match both `delegation.ErrDenied` and `delegation.ErrTokenShape`.
 Errors contain fixed reasons, not token contents.
-The structural caps bound fact joins and block processing before the request reaches the rate limiter.
+The early rate limiter runs before these checks. Structural caps then bound fact joins and block processing.
 Biscuit-go v2.2.0 deadlines do not cover check evaluation and cannot reliably stop timed-out goroutines.
 Runtime limits alone do not bound per-request CPU.
 
