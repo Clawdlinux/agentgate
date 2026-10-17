@@ -577,6 +577,10 @@ func buildURL(baseURL, pathTemplate string, params map[string]any) string {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	if response, ok := v.(ActResponse); ok && len(response.Body) > 0 {
+		writeActResponse(w, status, response)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)

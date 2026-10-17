@@ -68,7 +68,7 @@ func (s *Server) writeStream(w http.ResponseWriter, r *http.Request, att *attemp
 	defer func() {
 		timer.Stop()
 		stream.close()
-		controller.SetWriteDeadline(time.Time{})
+		controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		stop("completed")
 		s.logger.Info("stream finished",
 			"agent", att.agentKey.ID,

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -199,6 +201,93 @@ func TestAct_ResponseBodyShape(t *testing.T) {
 				if text != content || body["body"] != nil {
 					t.Fatalf("response=%s", w.Body)
 				}
+			}
+		})
+	}
+}
+
+func TestAct_ResponseEnvelopeMatchesLegacyStructure(t *testing.T) {
+	for _, content := range []string{
+		`{"html":"<script>&</script>","line":"` + "\u2028\u2029" + `"}`,
+		" \n { \"nested\" : [true, null, {\"n\": 9007199254740993}], \"x\": \"😀\" } \t",
+		`[1,"two",null]`, `null`, `"string"`, `1.00e+2`,
+		"<script>&</script>\n\"text\"\x00", "invalid UTF-8: \xff", "",
+	} {
+		t.Run(content, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, content)
+			}))
+			defer up.Close()
+			srv, _ := bodyGateway(t, up.URL, "{}", false)
+			w := transportAct(t, srv)
+			var actual ActResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &actual); err != nil {
+				t.Fatal(err)
+			}
+			legacy := ActResponse{Status: 200, LatencyMS: actual.LatencyMS}
+			if json.Valid([]byte(content)) {
+				legacy.Body = json.RawMessage(content)
+			} else {
+				legacy.BodyText = content
+			}
+			var encoded bytes.Buffer
+			if err := json.NewEncoder(&encoded).Encode(legacy); err != nil {
+				t.Fatal(err)
+			}
+			decode := func(raw []byte) any {
+				t.Helper()
+				var value any
+				dec := json.NewDecoder(bytes.NewReader(raw))
+				dec.UseNumber()
+				if err := dec.Decode(&value); err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
+			if !reflect.DeepEqual(decode(w.Body.Bytes()), decode(encoded.Bytes())) {
+				t.Fatalf("actual=%s legacy=%s", w.Body, &encoded)
+			}
+			if len(legacy.Body) > 0 {
+				want := fmt.Sprintf("{\"status\":200,\"body\":%s,\"latency_ms\":%d}\n", content, actual.LatencyMS)
+				if w.Body.String() != want {
+					t.Fatalf("upstream JSON changed: got=%q want=%q", w.Body.String(), want)
+				}
+			} else if w.Body.String() != encoded.String() {
+				t.Fatalf("text envelope changed: actual=%q legacy=%q", w.Body.String(), encoded.String())
+			}
+		})
+	}
+}
+
+type discardResponseWriter struct {
+	header http.Header
+}
+
+func (w *discardResponseWriter) Header() http.Header { return w.header }
+func (*discardResponseWriter) WriteHeader(int)       {}
+func (*discardResponseWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func BenchmarkWriteActResponse(b *testing.B) {
+	const size = 1 << 20
+	for _, kind := range []string{"json", "text"} {
+		b.Run(kind, func(b *testing.B) {
+			response := ActResponse{Status: 200, LatencyMS: 1}
+			if kind == "json" {
+				response.Body = json.RawMessage(`{"value":"` + strings.Repeat("x", size-len(`{"value":""}`)) + `"}`)
+				if !json.Valid(response.Body) {
+					b.Fatal("invalid benchmark JSON")
+				}
+			} else {
+				response.BodyText = strings.Repeat("x", size)
+			}
+			w := &discardResponseWriter{header: make(http.Header)}
+			b.SetBytes(size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				writeJSON(w, 200, response)
 			}
 		})
 	}

@@ -32,6 +32,8 @@ The fixed message is `upstream response exceeds configured limit`.
 The receipt records status 502 and the same error code.
 The gateway reads at most the limit plus 1 byte, then closes upstream without an unbounded drain.
 JSON uses `body` in the response envelope. Text uses `body_text`.
+Validated JSON bytes pass through without compaction or HTML escaping.
+Envelope field order stays unchanged. Text keeps standard JSON string escaping.
 
 ## SSE negotiation and receipts
 
@@ -55,6 +57,7 @@ Blank-line SSE boundaries reset it. Line endings may use LF, CRLF, or CR.
 Partial events don't extend the timeout.
 The separate byte limit stops oversized streams. It doesn't change an already-sent HTTP status.
 Client disconnects stop forwarding and close upstream.
+Stream completion leaves a 5s write deadline for the final HTTP framing.
 
 The final server log includes `sha256`, `bytes`, and `reason`.
 Reasons include `completed`, `idle_timeout`, `max_stream_bytes`, and transport or client failures.

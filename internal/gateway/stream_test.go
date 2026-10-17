@@ -375,3 +375,33 @@ func TestEventBoundaries(t *testing.T) {
 		})
 	}
 }
+
+type deadlineResponseWriter struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+}
+
+func (w *deadlineResponseWriter) SetWriteDeadline(deadline time.Time) error {
+	w.deadlines = append(w.deadlines, deadline)
+	return nil
+}
+
+func TestAct_SSEFinalWriteDeadline(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: complete\n\n")
+	}))
+	defer up.Close()
+	srv, _ := bodyGateway(t, up.URL, "{}", true)
+	w := &deadlineResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+	start := time.Now()
+	srv.ServeHTTP(w, streamRequest(t.Context(), "", "text/event-stream"))
+	end := time.Now()
+	if w.Code != 200 || len(w.deadlines) < 2 {
+		t.Fatalf("status=%d deadlines=%v", w.Code, w.deadlines)
+	}
+	final := w.deadlines[len(w.deadlines)-1]
+	if final.Before(start.Add(5*time.Second)) || final.After(end.Add(5*time.Second)) {
+		t.Fatalf("final deadline=%v, want 5s after stream completion between %v and %v", final, start, end)
+	}
+}
