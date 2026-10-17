@@ -19,8 +19,10 @@ import (
 var ErrTokenShape = errors.New("delegation: unsupported token shape")
 
 const (
-	maxChecksPerBlock     = 16
-	maxPredicatesPerQuery = 4
+	maxChecksPerBlock      = 16
+	maxPredicatesPerQuery  = 4
+	maxExpressionsPerQuery = 8
+	maxOpsPerExpression    = 32
 )
 
 func denyTokenShape(reason string) error {
@@ -60,6 +62,19 @@ func (v *Verifier) checkTokenShape(token []byte, b *biscuit.Biscuit) error {
 			for _, query := range check.GetQueries() {
 				if len(query.GetBody()) > maxPredicatesPerQuery {
 					return denyTokenShape("too many predicates in check query")
+				}
+				if len(query.GetExpressions()) > maxExpressionsPerQuery {
+					return denyTokenShape("too many expressions in check query")
+				}
+				for _, expression := range query.GetExpressions() {
+					if len(expression.GetOps()) > maxOpsPerExpression {
+						return denyTokenShape("too many operations in check expression")
+					}
+					for _, op := range expression.GetOps() {
+						if binary := op.GetBinary(); binary != nil && binary.GetKind() == pb.OpBinary_Regex {
+							return denyTokenShape("regex expressions are not allowed")
+						}
+					}
 				}
 			}
 		}

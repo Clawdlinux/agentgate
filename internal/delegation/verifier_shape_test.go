@@ -56,6 +56,16 @@ func TestVerify_TokenShapeRejectedBeforeAuthorizer(t *testing.T) {
 	secret := "private-token-content"
 	oversized := rootToken(strings.Replace(grant, `"github"`, `"`+strings.Repeat(secret, 250)+`"`, 1))
 	bomb := `check if f($a), f($b), f($c), f($d), f($e);`
+	regex := `check if "a".matches("a");`
+	overlongExpression := `check if ` + strings.Repeat("1 + ", 15) + `1 == 16;`
+	parsed, err := parser.FromStringBlock(overlongExpression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(parsed.Checks[0].Queries[0].Expressions[0]); got != 33 {
+		t.Fatalf("oversized expression fixture has %d ops, want 33", got)
+	}
+	tooManyExpressions := `check if ` + strings.TrimSuffix(strings.Repeat("true, ", 9), ", ") + `;`
 	for _, tc := range []struct {
 		name   string
 		token  []byte
@@ -70,7 +80,15 @@ func TestVerify_TokenShapeRejectedBeforeAuthorizer(t *testing.T) {
 		{"attenuation later query predicates", attenuated(strings.Replace(bomb, "check if ", "check if true or ", 1), 1), Limits{}},
 		{"fact and predicate bomb", attenuated(`f(0); f(1); check if f($a), f($b), f($c);`, 1), Limits{}},
 		{"attenuation checks", attenuated(strings.Repeat(`check if true;`, 17), 1), Limits{}},
+		{"attenuation regex", attenuated(regex, 1), Limits{}},
+		{"attenuation later regex expression", attenuated(`check if true, "a".matches("a");`, 1), Limits{}},
+		{"attenuation later regex query", attenuated(`check if true or "a".matches("a");`, 1), Limits{}},
+		{"attenuation expression ops", attenuated(overlongExpression, 1), Limits{}},
+		{"attenuation expressions", attenuated(tooManyExpressions, 1), Limits{}},
 		{"authority checks", rootToken(grant + strings.Repeat(`check if true;`, 17)), Limits{}},
+		{"authority regex", rootToken(grant + regex), Limits{}},
+		{"authority expression ops", rootToken(grant + overlongExpression), Limits{}},
+		{"authority expressions", rootToken(grant + tooManyExpressions), Limits{}},
 		{"authority predicates", rootToken(grant + bomb), Limits{}},
 		{"authority rule", rootToken(grant + `f($a) <- f($a);`), Limits{}},
 		{"authority extra fact", rootToken(grant + `f(0);`), Limits{}},
@@ -90,11 +108,11 @@ func TestVerify_TokenShapeRejectedBeforeAuthorizer(t *testing.T) {
 				return nil, errors.New("authorizer must not be built")
 			}
 			chain, err := v.Verify(tc.token, "alice", "agent-1", "github", "list_repos", now)
-			if !errors.Is(err, ErrDenied) || !errors.Is(err, ErrTokenShape) {
-				t.Fatalf("Verify error = %v, want ErrDenied and ErrTokenShape", err)
-			}
 			if chain != nil || calls != 0 {
 				t.Fatalf("chain = %v, authorizer calls = %d, want nil and 0", chain, calls)
+			}
+			if !errors.Is(err, ErrDenied) || !errors.Is(err, ErrTokenShape) {
+				t.Fatalf("Verify error = %v, want ErrDenied and ErrTokenShape", err)
 			}
 			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "alice") {
 				t.Fatalf("shape error contains token content: %v", err)
@@ -116,6 +134,14 @@ func TestVerify_TokenShapeBoundariesAllowed(t *testing.T) {
 	}
 
 	predicate := `grant($p, $a, $s, $act, $exp)`
+	maxOps := `check if (` + strings.Repeat("1 + ", 14) + `1 == 15);`
+	parsed, err := parser.FromStringBlock(maxOps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(parsed.Checks[0].Queries[0].Expressions[0]); got != 32 {
+		t.Fatalf("boundary expression fixture has %d ops, want 32", got)
+	}
 	for _, tc := range []struct {
 		name  string
 		code  string
@@ -124,6 +150,9 @@ func TestVerify_TokenShapeBoundariesAllowed(t *testing.T) {
 		{"max blocks", `check if true;`, 8},
 		{"max checks", strings.Repeat(`check if true;`, 16), 1},
 		{"max predicates", `check if ` + strings.TrimSuffix(strings.Repeat(predicate+", ", 4), ", ") + `;`, 1},
+		{"max expression ops", maxOps, 1},
+		{"max expressions", `check if ` + strings.TrimSuffix(strings.Repeat("true, ", 8), ", ") + `;`, 1},
+		{"date and equality", `check if ` + predicate + `, $exp >= 2026-10-01T00:00:00Z, $p == "alice";`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := token

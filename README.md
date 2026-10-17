@@ -338,6 +338,8 @@ Tokens are limited to 4096 bytes and 8 attenuation blocks.
 Authority contains exactly 1 `grant` fact with 4 strings and an expiry date. Authority rules are rejected.
 Attenuation blocks can contain checks only. Facts and rules are rejected.
 Each block permits at most 16 checks. Each check query body permits at most 4 predicates.
+Each query permits at most 8 expressions. Each expression permits at most 32 operations.
+Regex `.matches()` expressions are rejected because their compile and match work bypasses Datalog run limits.
 Authority checks follow the same caps.
 
 These checks run before authorizer construction. Rejections match both `delegation.ErrDenied` and `delegation.ErrTokenShape`.
