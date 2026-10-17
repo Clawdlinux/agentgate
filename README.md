@@ -322,6 +322,15 @@ All writes must pass through the decorated store.
 Concurrent refreshes share one result per store and user-service pair within a process.
 Current waiters share refresh failures. Later calls retry.
 Canceling a waiter doesn't cancel the shared refresh.
+Each shared refresh has a separate `15s` deadline. OAuth HTTP exchanges also have a `15s` client timeout.
+Refresh functions receive that context and must honor cancellation.
+Timeouts and canceled waits return HTTP `504` with receipt error code `vault_refresh_timeout`, not `token_expired`.
+Refresh writes compare the stored refresh token inside a SQLite transaction.
+Deleted credentials stay deleted. A concurrent re-link keeps its replacement token and scopes.
+On a comparison mismatch, refresh returns the current credential only when it remains valid.
+Rotated refresh tokens get up to 3 conditional write attempts.
+If every write fails, the current request still receives the new access token.
+The failure is logged without token values. Later requests may require re-linking because the rotation wasn't saved.
 Replicas maintain separate caches and refresh independently.
 Rotating refresh tokens still need cross-process coordination when replicas share credentials.
 External writes or deletes can leave stale local credentials until cache expiry.

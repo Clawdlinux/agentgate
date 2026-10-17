@@ -169,6 +169,23 @@ func (s *CachedStore) Delete(user, service string) error {
 	return s.inner.Delete(user, service)
 }
 
+func (s *CachedStore) CompareAndPut(user, service, expectedRefreshToken string, tok Token) (bool, error) {
+	s.gate.Lock()
+	defer s.gate.Unlock()
+	key := credentialKey{user, service}
+	s.mu.Lock()
+	s.remove(key)
+	s.mu.Unlock()
+	updated, err := s.inner.CompareAndPut(user, service, expectedRefreshToken, tok)
+	if err != nil || !updated {
+		return updated, err
+	}
+	s.mu.Lock()
+	s.remember(key, tok)
+	s.mu.Unlock()
+	return true, nil
+}
+
 func (s *CachedStore) ListServices(user string) ([]string, error) {
 	return s.inner.ListServices(user)
 }

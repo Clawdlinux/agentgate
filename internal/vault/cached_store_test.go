@@ -17,6 +17,8 @@ type countingStore struct {
 	gets, puts  int
 	putErr      error
 	deleteErr   error
+	compares    int
+	casErrors   []error
 	getStarted  chan struct{}
 	getContinue chan struct{}
 }
@@ -60,6 +62,28 @@ func (s *countingStore) Delete(user, service string) error {
 	}
 	delete(s.tokens, tokenPair{user, service})
 	return nil
+}
+
+func (s *countingStore) CompareAndPut(user, service, expectedRefreshToken string, tok Token) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.compares++
+	if len(s.casErrors) > 0 {
+		err := s.casErrors[0]
+		s.casErrors = s.casErrors[1:]
+		return false, err
+	}
+	if s.putErr != nil {
+		return false, s.putErr
+	}
+	key := tokenPair{user, service}
+	current, exists := s.tokens[key]
+	if !exists || current.RefreshToken != expectedRefreshToken {
+		return false, nil
+	}
+	s.puts++
+	s.tokens[key] = tok
+	return true, nil
 }
 
 func (s *countingStore) ListServices(user string) ([]string, error) {

@@ -3,13 +3,16 @@ package vault
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
 
-// RefreshFunc is called when a token needs refreshing. It takes the current
-// refresh token and returns new access/refresh tokens and expiry.
-type RefreshFunc func(refreshToken string) (newAccess, newRefresh string, expiresIn time.Duration, err error)
+// DefaultRefreshTimeout bounds each shared OAuth refresh.
+const DefaultRefreshTimeout = 15 * time.Second
+
+// RefreshFunc exchanges a refresh token. It must honor context cancellation.
+type RefreshFunc func(ctx context.Context, refreshToken string) (newAccess, newRefresh string, expiresIn time.Duration, err error)
 
 type refreshKey struct {
 	store Store
@@ -31,6 +34,10 @@ var refreshFlights = struct {
 // Concurrent callers sharing a store and token pair share one refresh.
 // Cancellation stops only the caller's wait, not the shared refresh.
 func GetOrRefresh(ctx context.Context, store Store, userID, service string, refreshFn RefreshFunc) (Token, error) {
+	return getOrRefresh(ctx, store, userID, service, refreshFn, DefaultRefreshTimeout)
+}
+
+func getOrRefresh(ctx context.Context, store Store, userID, service string, refreshFn RefreshFunc, timeout time.Duration) (Token, error) {
 	if err := ctx.Err(); err != nil {
 		return Token{}, err
 	}
@@ -49,7 +56,9 @@ func GetOrRefresh(ctx context.Context, store Store, userID, service string, refr
 		call = &refreshCall{done: make(chan struct{})}
 		refreshFlights.calls[key] = call
 		go func() {
-			call.token, call.err = refreshToken(store, userID, service, refreshFn)
+			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+			defer cancel()
+			call.token, call.err = refreshToken(refreshCtx, store, userID, service, refreshFn)
 			refreshFlights.Lock()
 			delete(refreshFlights.calls, key)
 			close(call.done)
@@ -66,7 +75,7 @@ func GetOrRefresh(ctx context.Context, store Store, userID, service string, refr
 	}
 }
 
-func refreshToken(store Store, userID, service string, refreshFn RefreshFunc) (Token, error) {
+func refreshToken(ctx context.Context, store Store, userID, service string, refreshFn RefreshFunc) (Token, error) {
 	// Re-read after joining the flight. Another refresh may have finished after the caller's first read.
 	tok, err := store.Get(userID, service)
 	if err != nil {
@@ -87,9 +96,13 @@ func refreshToken(store Store, userID, service string, refreshFn RefreshFunc) (T
 		return Token{}, fmt.Errorf("vault: token for %s:%s expired and no refresh function configured", userID, service)
 	}
 
-	newAccess, newRefresh, expiresIn, err := refreshFn(tok.RefreshToken)
+	expectedRefresh := tok.RefreshToken
+	newAccess, newRefresh, expiresIn, err := refreshFn(ctx, expectedRefresh)
 	if err != nil {
 		return Token{}, fmt.Errorf("vault: refresh failed for %s:%s. User must re-link: %w", userID, service, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
 	}
 
 	tok.AccessToken = newAccess
@@ -98,9 +111,36 @@ func refreshToken(store Store, userID, service string, refreshFn RefreshFunc) (T
 	}
 	tok.ExpiresAt = time.Now().Add(expiresIn)
 
-	if err := store.Put(userID, service, tok); err != nil {
-		return Token{}, fmt.Errorf("vault: store refreshed token: %w", err)
+	attempts := 1
+	rotated := newRefresh != "" && newRefresh != expectedRefresh
+	if rotated {
+		attempts = 3
 	}
-
-	return tok, nil
+	var writeErr error
+	for range attempts {
+		updated, err := store.CompareAndPut(userID, service, expectedRefresh, tok)
+		if err != nil {
+			writeErr = err
+			if ctx.Err() != nil {
+				return Token{}, ctx.Err()
+			}
+			continue
+		}
+		if updated {
+			return tok, nil
+		}
+		current, err := store.Get(userID, service)
+		if err != nil {
+			return Token{}, err
+		}
+		if current.IsExpired() {
+			return Token{}, fmt.Errorf("vault: credential changed during refresh and replacement is expired")
+		}
+		return current, nil
+	}
+	slog.Error("vault refresh persistence failed", "user", userID, "service", service, "attempts", attempts)
+	if rotated {
+		return tok, nil
+	}
+	return Token{}, fmt.Errorf("vault: store refreshed token: %w", writeErr)
 }

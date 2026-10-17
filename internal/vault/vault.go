@@ -47,6 +47,8 @@ func (t Token) IsExpired() bool {
 // goroutine-safe.
 type Store interface {
 	Put(userID, service string, tok Token) error
+	// CompareAndPut updates an existing token only when its refresh token still matches.
+	CompareAndPut(userID, service, expectedRefreshToken string, tok Token) (bool, error)
 	Get(userID, service string) (Token, error)
 	Delete(userID, service string) error
 	ListServices(userID string) ([]string, error)
@@ -86,22 +88,27 @@ func storeKey(userID, service string) string {
 }
 
 func (s *MemoryStore) Put(userID, service string, tok Token) error {
-	plaintext, err := json.Marshal(tok)
+	ciphertext, err := s.encryptToken(tok)
 	if err != nil {
-		return fmt.Errorf("vault: marshal: %w", err)
+		return err
 	}
-
-	nonce := make([]byte, s.gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return fmt.Errorf("vault: nonce: %w", err)
-	}
-
-	ciphertext := s.gcm.Seal(nonce, nonce, plaintext, nil)
-
 	s.mu.Lock()
 	s.tokens[storeKey(userID, service)] = ciphertext
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *MemoryStore) encryptToken(tok Token) ([]byte, error) {
+	plaintext, err := json.Marshal(tok)
+	if err != nil {
+		return nil, fmt.Errorf("vault: marshal: %w", err)
+	}
+
+	nonce := make([]byte, s.gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("vault: nonce: %w", err)
+	}
+	return s.gcm.Seal(nonce, nonce, plaintext, nil), nil
 }
 
 func (s *MemoryStore) Get(userID, service string) (Token, error) {
@@ -112,7 +119,10 @@ func (s *MemoryStore) Get(userID, service string) (Token, error) {
 	if !ok {
 		return Token{}, fmt.Errorf("%w: %s:%s", ErrTokenNotFound, userID, service)
 	}
+	return s.decryptToken(ciphertext)
+}
 
+func (s *MemoryStore) decryptToken(ciphertext []byte) (Token, error) {
 	nonceSize := s.gcm.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return Token{}, errors.New("vault: ciphertext too short")
@@ -129,6 +139,29 @@ func (s *MemoryStore) Get(userID, service string) (Token, error) {
 		return Token{}, fmt.Errorf("vault: unmarshal: %w", err)
 	}
 	return tok, nil
+}
+
+func (s *MemoryStore) CompareAndPut(userID, service, expectedRefreshToken string, tok Token) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := storeKey(userID, service)
+	ciphertext, exists := s.tokens[key]
+	if !exists {
+		return false, nil
+	}
+	current, err := s.decryptToken(ciphertext)
+	if err != nil {
+		return false, err
+	}
+	if current.RefreshToken != expectedRefreshToken {
+		return false, nil
+	}
+	ciphertext, err = s.encryptToken(tok)
+	if err != nil {
+		return false, err
+	}
+	s.tokens[key] = ciphertext
+	return true, nil
 }
 
 func (s *MemoryStore) Delete(userID, service string) error {

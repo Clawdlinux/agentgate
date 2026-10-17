@@ -19,7 +19,7 @@ func TestGetOrRefresh_FreshToken(t *testing.T) {
 	})
 
 	refreshCalled := false
-	tok, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(rt string) (string, string, time.Duration, error) {
+	tok, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(_ context.Context, rt string) (string, string, time.Duration, error) {
 		refreshCalled = true
 		return "", "", 0, nil
 	})
@@ -44,7 +44,7 @@ func TestGetOrRefresh_ExpiredToken(t *testing.T) {
 		ExpiresAt:    time.Now().Add(-time.Hour),
 	})
 
-	tok, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(rt string) (string, string, time.Duration, error) {
+	tok, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(_ context.Context, rt string) (string, string, time.Duration, error) {
 		if rt != "refresh-123" {
 			t.Fatalf("unexpected refresh token: %s", rt)
 		}
@@ -74,7 +74,7 @@ func TestGetOrRefresh_RefreshFails(t *testing.T) {
 		ExpiresAt:    time.Now().Add(-time.Hour),
 	})
 
-	_, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(rt string) (string, string, time.Duration, error) {
+	_, err := GetOrRefresh(context.Background(), store, "user-1", "github", func(_ context.Context, rt string) (string, string, time.Duration, error) {
 		return "", "", 0, errors.New("refresh denied")
 	})
 	if err == nil {
@@ -138,7 +138,7 @@ func TestGetOrRefreshSingleflight(t *testing.T) {
 			}()
 			wantErr := errors.New("provider denied refresh")
 			var refreshes atomic.Int32
-			refresh := func(rt string) (string, string, time.Duration, error) {
+			refresh := func(_ context.Context, rt string) (string, string, time.Duration, error) {
 				refreshes.Add(1)
 				<-release
 				if fail {
@@ -201,10 +201,14 @@ func TestGetOrRefreshCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	defer close(release)
-	refresh := func(string) (string, string, time.Duration, error) {
+	refresh := func(ctx context.Context, _ string) (string, string, time.Duration, error) {
 		close(started)
-		<-release
-		return "new", "", time.Hour, nil
+		select {
+		case <-release:
+			return "new", "", time.Hour, nil
+		case <-ctx.Done():
+			return "", "", 0, ctx.Err()
+		}
 	}
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	leaderDone := make(chan error, 1)
@@ -278,7 +282,7 @@ func TestGetOrRefreshPutFailure(t *testing.T) {
 	want := errors.New("database write failed")
 	inner.putErr = want
 	refreshes := 0
-	refresh := func(string) (string, string, time.Duration, error) {
+	refresh := func(context.Context, string) (string, string, time.Duration, error) {
 		refreshes++
 		return "new", "", time.Hour, nil
 	}
@@ -309,7 +313,7 @@ func TestGetOrRefreshIndependentPairsAndStores(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		_, err := GetOrRefresh(context.Background(), blocked, "u", "a", func(string) (string, string, time.Duration, error) {
+		_, err := GetOrRefresh(context.Background(), blocked, "u", "a", func(context.Context, string) (string, string, time.Duration, error) {
 			close(started)
 			<-release
 			return "new", "", time.Hour, nil
@@ -333,7 +337,7 @@ func TestGetOrRefreshIndependentPairsAndStores(t *testing.T) {
 		{blocked, "b", "new-b"},
 		{other, "a", "new-other"},
 	} {
-		tok, err := GetOrRefresh(ctx, tc.store, "u", tc.service, func(string) (string, string, time.Duration, error) {
+		tok, err := GetOrRefresh(ctx, tc.store, "u", tc.service, func(context.Context, string) (string, string, time.Duration, error) {
 			return tc.want, "", time.Hour, nil
 		})
 		if err != nil || tok.AccessToken != tc.want {

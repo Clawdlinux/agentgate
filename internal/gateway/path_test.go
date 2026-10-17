@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -333,7 +334,7 @@ func TestActInvalidPathParamsBeforeVault(t *testing.T) {
 			srv.cfg.Vault = counted
 			var refreshCalls atomic.Int32
 			srv.cfg.Refreshers = map[string]vault.RefreshFunc{
-				"github": func(string) (string, string, time.Duration, error) {
+				"github": func(context.Context, string) (string, string, time.Duration, error) {
 					refreshCalls.Add(1)
 					return "new-token", "new-refresh", time.Hour, nil
 				},
