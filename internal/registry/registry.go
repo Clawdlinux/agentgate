@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Clawdlinux/agentgate/internal/upstream"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,10 +32,11 @@ var ErrActionNotFound = errors.New("registry: action not found")
 
 // Service describes one SaaS API endpoint.
 type Service struct {
-	Name    string            `yaml:"name"`
-	BaseURL string            `yaml:"base_url"`
-	Auth    AuthCfg           `yaml:"auth"`
-	Actions map[string]Action `yaml:"actions"`
+	Name     string            `yaml:"name"`
+	BaseURL  string            `yaml:"base_url"`
+	Auth     AuthCfg           `yaml:"auth"`
+	Actions  map[string]Action `yaml:"actions"`
+	Upstream upstream.Config   `yaml:"upstream,omitempty"`
 }
 
 // AuthCfg holds the authentication configuration for a service.
@@ -48,9 +50,10 @@ type AuthCfg struct {
 
 // Action describes one callable operation on a service.
 type Action struct {
-	Method string            `yaml:"method"` // GET, POST, PUT, DELETE, PATCH
-	Path   string            `yaml:"path"`   // path template, e.g. /repos/{owner}/{repo}/issues
-	Params map[string]string `yaml:"params"` // param_name -> type (string, int, bool, string?, etc.)
+	Method     string            `yaml:"method"`               // GET, POST, PUT, DELETE, PATCH
+	Path       string            `yaml:"path"`                 // path template, e.g. /repos/{owner}/{repo}/issues
+	Params     map[string]string `yaml:"params"`               // param_name -> type (string, int, bool, string?, etc.)
+	Idempotent bool              `yaml:"idempotent,omitempty"` // opts PUT and DELETE into retries
 }
 
 // Config is the top-level YAML structure for the service catalog.
@@ -83,6 +86,11 @@ func (r *Registry) LoadBytes(data []byte) error {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("registry: parse: %w", err)
+	}
+	for name, svc := range cfg.Services {
+		if err := svc.Upstream.Validate(); err != nil {
+			return fmt.Errorf("registry: service %s: %w", name, err)
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -352,6 +352,87 @@ Runtime limits alone do not bound per-request CPU.
 
 Service configurations are YAML files in `configs/services/`. See `configs/services/google_workspace.yaml` for an example. The gateway itself loads the merged `configs/services.yaml`.
 
+### Upstream connections and retries
+
+Each service gets a separate HTTP client, connection pool, and circuit breaker.
+Existing service YAML needs no changes. Optional `upstream` settings override defaults.
+Settings take effect on the service's first dispatch. Restart the gateway after changing them.
+
+```yaml
+services:
+  example:
+    base_url: https://api.example.com
+    auth:
+      type: bearer
+    upstream:
+      request_timeout: 30s
+      response_header_timeout: 10s
+      max_idle_conns_per_host: 64
+      max_conns_per_host: 0
+      retry:
+        max_retries: 2
+        base_delay: 100ms
+        max_delay: 2s
+      breaker:
+        failure_threshold: 5
+        cooldown: 30s
+    actions:
+      list:
+        method: GET
+        path: /items
+      replace:
+        method: PUT
+        path: /items/{id}
+        idempotent: true
+```
+
+| Setting under `upstream` | Default | Meaning |
+|-------------------------|---------|---------|
+| `request_timeout` | `30s` | Context deadline across dispatch, retries, and response reading |
+| `dial_timeout` | `5s` | Connection establishment timeout |
+| `keep_alive` | `30s` | TCP keepalive interval |
+| `tls_handshake_timeout` | `5s` | TLS handshake timeout |
+| `response_header_timeout` | `30s` | Wait for response headers |
+| `idle_conn_timeout` | `90s` | Idle connection lifetime |
+| `max_idle_conns` | `256` | Idle connections per service |
+| `max_idle_conns_per_host` | `32` | Idle connections per upstream host |
+| `max_conns_per_host` | `0` | Total connections per host. `0` means unlimited. |
+| `retry.max_retries` | `2` | Additional attempts. `0` disables retries. |
+| `retry.base_delay` | `100ms` | Initial exponential backoff ceiling |
+| `retry.max_delay` | `2s` | Backoff and Retry-After cap |
+| `breaker.failure_threshold` | `5` | Consecutive failed HTTP attempts before opening |
+| `breaker.cooldown` | `30s` | Time before allowing 1 half-open probe |
+
+Duration values use Go syntax, such as `100ms` or `10s`.
+Zero values use defaults, except `max_conns_per_host` and `retry.max_retries`.
+Negative values fail registry loading. The retry base delay must not exceed its cap.
+HTTP/2 is enabled. Proxy selection follows `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+An earlier caller deadline wins. Embedded `Config.HTTPClient.Timeout` does not replace the context deadline.
+
+GET, HEAD, and OPTIONS can retry transport errors and HTTP 502, 503, or 504.
+PUT and DELETE need `idempotent: true` on their registry action.
+POST, PATCH, and other methods never retry, even with that flag.
+Bodies must be replayable through `http.Request.GetBody`. Gateway JSON bodies already support this.
+Each retry uses full-jitter exponential backoff. Retry-After can increase the wait, but never beyond `retry.max_delay`.
+Canceled requests stop retrying. Discarded response bodies close before waiting.
+
+The gateway shares 1 retry token bucket across all service clients.
+Its refill rate is 20% of the recent request rate, with a floor of 10 retries/s.
+The rate uses a 1s sliding window, split into 100ms buckets.
+Capacity equals 1s of refill tokens. The bucket starts with 10 tokens.
+A separate window ceiling caps retries at 20% of requests, or 10 retries when traffic is low.
+Retries do not add request credits. An empty bucket returns the last response or transport failure without retrying.
+
+Transport errors and all HTTP 5xx responses count as breaker failures.
+Other responses reset the consecutive failure count, including HTTP 4xx.
+An open breaker fails fast with HTTP 503 and code `upstream_unavailable`.
+After cooldown, only 1 probe runs. Success closes the breaker. Failure starts another cooldown.
+
+Internal retries still produce exactly 1 receipt per action attempt, containing the final status.
+Breaker rejections also produce receipts, with `policyDecision: allow` and `errorCode: upstream_unavailable`.
+Receipt encoding is unchanged. Transport failures return a fixed message without upstream error text.
+Server logs contain structured failure diagnostics, never request headers or raw error strings.
+
 ## Tech Stack
 
 - **Go 1.22+** — single binary, no runtime dependencies

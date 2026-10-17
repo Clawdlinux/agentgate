@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,6 +35,7 @@ import (
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
 	"github.com/Clawdlinux/agentgate/internal/registry"
+	upstreamclient "github.com/Clawdlinux/agentgate/internal/upstream"
 	"github.com/Clawdlinux/agentgate/internal/vault"
 )
 
@@ -75,7 +77,7 @@ type ReceiptRecorder interface {
 type Config struct {
 	Registry   *registry.Registry
 	Vault      vault.Store
-	HTTPClient *http.Client
+	HTTPClient *http.Client // optional embedded client; upstream deadlines use request contexts
 	Logger     *slog.Logger
 	Authorizer AgentAuthorizer              // required: verifies API keys and scopes
 	Receipts   ReceiptRecorder              // required: commits one receipt per attempt
@@ -86,9 +88,10 @@ type Config struct {
 
 // Server is the gateway HTTP server.
 type Server struct {
-	cfg    Config
-	mux    *http.ServeMux
-	logger *slog.Logger
+	cfg       Config
+	mux       *http.ServeMux
+	logger    *slog.Logger
+	upstreams *upstreamclient.Pool
 }
 
 // New creates a gateway server. Authorizer and Receipts must not be nil —
@@ -97,16 +100,13 @@ func New(cfg Config) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
-	}
 	if cfg.Authorizer == nil {
 		panic("gateway: Config.Authorizer must not be nil")
 	}
 	if cfg.Receipts == nil {
 		panic("gateway: Config.Receipts must not be nil")
 	}
-	s := &Server{cfg: cfg, logger: cfg.Logger}
+	s := &Server{cfg: cfg, logger: cfg.Logger, upstreams: upstreamclient.New(upstreamclient.Options{Client: cfg.HTTPClient})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/services", s.handleListServices)
@@ -452,13 +452,18 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 	}
 	upstream.Header.Set("Accept", "application/json")
 
-	resp, err := s.cfg.HTTPClient.Do(upstream)
+	resp, err := s.upstreams.Do(svc.Name, svc.Upstream, upstream, action.Idempotent)
 	if err != nil {
+		status, code, message := http.StatusBadGateway, "upstream_error", "upstream request failed"
+		if errors.Is(err, upstreamclient.ErrUnavailable) {
+			status, code, message = http.StatusServiceUnavailable, "upstream_unavailable", "upstream unavailable"
+		}
+		s.logUpstreamError(svc.Name, err)
 		return &outcome{
-			status:         http.StatusBadGateway,
-			body:           ErrorResponse{Error: fmt.Sprintf("upstream request failed: %v", err), Code: "upstream_error"},
+			status:         status,
+			body:           ErrorResponse{Error: message, Code: code},
 			policyDecision: "allow",
-			errorCode:      "upstream_error",
+			errorCode:      code,
 		}
 	}
 	defer resp.Body.Close()
