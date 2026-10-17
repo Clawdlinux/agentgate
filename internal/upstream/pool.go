@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -136,13 +137,42 @@ func (p *Pool) CloseIdleConnections() {
 // Do dispatches one action, including bounded retries. Close the returned response body.
 // The request deadline remains active until the final response body closes.
 func (p *Pool) Do(service string, cfg Config, req *http.Request, idempotent bool) (*http.Response, error) {
+	return p.do(service, cfg, req, idempotent, false)
+}
+
+// DoStream bounds dispatch and retries, then lifts the deadline for a successful SSE response.
+// Callers must enforce stream limits and close the response body.
+func (p *Pool) DoStream(service string, cfg Config, req *http.Request, idempotent bool) (*http.Response, error) {
+	return p.do(service, cfg, req, idempotent, true)
+}
+
+// IsEventStream reports whether a response permits SSE pass-through.
+func IsEventStream(resp *http.Response) bool {
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return err == nil && mediaType == "text/event-stream" && resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func (p *Pool) do(service string, cfg Config, req *http.Request, idempotent, streaming bool) (*http.Response, error) {
 	if err := cfg.Validate(); err != nil {
 		closeBody(req.Body)
 		return nil, err
 	}
 	state := p.client(service, cfg)
 	callerCtx := req.Context()
-	ctx, cancel := context.WithTimeout(callerCtx, state.config.RequestTimeout)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var dispatchTimer *time.Timer
+	if streaming {
+		ctx, cancel = context.WithCancel(callerCtx)
+		dispatchTimer = time.AfterFunc(state.config.RequestTimeout, cancel)
+		cancelContext := cancel
+		cancel = func() {
+			dispatchTimer.Stop()
+			cancelContext()
+		}
+	} else {
+		ctx, cancel = context.WithTimeout(callerCtx, state.config.RequestTimeout)
+	}
 	keepContext := false
 	defer func() {
 		if !keepContext {
@@ -180,6 +210,9 @@ func (p *Pool) Do(service string, cfg Config, req *http.Request, idempotent bool
 		if !retryable || n >= *state.config.Retry.MaxRetries || !retryFailure(resp, err) || !p.budget.allow() {
 			if err != nil {
 				return nil, err
+			}
+			if streaming && IsEventStream(resp) {
+				dispatchTimer.Stop()
 			}
 			resp.Body = &deadlineBody{ReadCloser: resp.Body, cancel: cancel}
 			keepContext = true

@@ -54,6 +54,7 @@ type Action struct {
 	Path       string            `yaml:"path"`                 // path template, e.g. /repos/{owner}/{repo}/issues
 	Params     map[string]string `yaml:"params"`               // param_name -> type (string, int, bool, string?, etc.)
 	Idempotent bool              `yaml:"idempotent,omitempty"` // opts PUT and DELETE into retries
+	Stream     bool              `yaml:"stream,omitempty"`     // permits negotiated SSE pass-through
 }
 
 // Config is the top-level YAML structure for the service catalog.
