@@ -14,6 +14,7 @@ import (
 	"time"
 
 	biscuit "github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 )
 
@@ -23,14 +24,65 @@ import (
 // registry, vault, or upstream access.
 var ErrDenied = errors.New("delegation: denied")
 
+// Limits bounds each Datalog world run during authorization and grant queries.
+type Limits struct {
+	MaxDuration   time.Duration
+	MaxFacts      int
+	MaxIterations int
+}
+
+// DefaultLimits returns bounds for AgentGate's small delegation tokens.
+// Issue emits 1 grant fact and no rules. Typical attenuation adds a few checks.
+// The 250ms budget tolerates scheduler delays without raising fact or iteration caps.
+func DefaultLimits() Limits {
+	return Limits{
+		MaxDuration:   250 * time.Millisecond,
+		MaxFacts:      1000,
+		MaxIterations: 100,
+	}
+}
+
+// VerifierOption configures a Verifier.
+type VerifierOption func(*Verifier)
+
+// WithLimits overrides nonzero limits. Zero fields retain their defaults.
+// Negative limits fail closed when the Datalog world runs.
+func WithLimits(limits Limits) VerifierOption {
+	return func(v *Verifier) {
+		if limits.MaxDuration != 0 {
+			v.limits.MaxDuration = limits.MaxDuration
+		}
+		if limits.MaxFacts != 0 {
+			v.limits.MaxFacts = limits.MaxFacts
+		}
+		if limits.MaxIterations != 0 {
+			v.limits.MaxIterations = limits.MaxIterations
+		}
+	}
+}
+
 // Verifier checks a presented Biscuit token against one root public key.
 type Verifier struct {
 	rootPublicKey ed25519.PublicKey
+	limits        Limits
 }
 
 // NewVerifier returns a Verifier trusting exactly one root public key.
-func NewVerifier(rootPublicKey ed25519.PublicKey) *Verifier {
-	return &Verifier{rootPublicKey: rootPublicKey}
+func NewVerifier(rootPublicKey ed25519.PublicKey, opts ...VerifierOption) *Verifier {
+	v := &Verifier{rootPublicKey: rootPublicKey, limits: DefaultLimits()}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
+func (v *Verifier) newAuthorizer(b *biscuit.Biscuit) (biscuit.Authorizer, error) {
+	// Biscuit clones these limits into attenuation worlds. Query reruns the same world.
+	return b.Authorizer(v.rootPublicKey, biscuit.WithWorldOptions(
+		datalog.WithMaxDuration(v.limits.MaxDuration),
+		datalog.WithMaxFacts(v.limits.MaxFacts),
+		datalog.WithMaxIterations(v.limits.MaxIterations),
+	))
 }
 
 // Verify checks token's signature chain against the trusted root, then
@@ -60,7 +112,7 @@ func (v *Verifier) Verify(token []byte, humanPrincipal, agentKeyID, service, act
 		return nil, fmt.Errorf("%w: unmarshal: %v", ErrDenied, err)
 	}
 
-	authorizer, err := b.Authorizer(v.rootPublicKey)
+	authorizer, err := v.newAuthorizer(b)
 	if err != nil {
 		return nil, fmt.Errorf("%w: signature chain: %v", ErrDenied, err)
 	}
@@ -82,7 +134,7 @@ func (v *Verifier) Verify(token []byte, humanPrincipal, agentKeyID, service, act
 	authorizer.AddAuthorizer(parsedAuthorizer)
 
 	if err := authorizer.Authorize(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrDenied, err)
+		return nil, fmt.Errorf("%w: authorize: %w", ErrDenied, err)
 	}
 
 	matchRule, err := parser.FromStringRuleWithParams(
@@ -94,7 +146,7 @@ func (v *Verifier) Verify(token []byte, humanPrincipal, agentKeyID, service, act
 	}
 	matched, err := authorizer.Query(matchRule)
 	if err != nil {
-		return nil, fmt.Errorf("delegation: query matched grant: %w", err)
+		return nil, fmt.Errorf("%w: query matched grant: %w", ErrDenied, err)
 	}
 	if len(matched) == 0 {
 		// Authorize() passed but the grant fact cannot be re-located —
