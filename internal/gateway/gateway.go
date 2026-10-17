@@ -457,7 +457,7 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 	if refresher := s.cfg.Refreshers[att.req.Service]; refresher != nil {
-		tok, err = vault.GetOrRefresh(s.cfg.Vault, att.req.OnBehalfOf, att.req.Service, refresher)
+		tok, err = vault.GetOrRefresh(ctx, s.cfg.Vault, att.req.OnBehalfOf, att.req.Service, refresher)
 		if err != nil {
 			return &outcome{
 				status:         http.StatusForbidden,

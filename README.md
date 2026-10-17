@@ -305,6 +305,28 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 6. **OAuth state encrypted** with AES-256-GCM and expires after 10 minutes.
 7. **OAuth refresh.** Configured OAuth providers refresh tokens expiring within 5 minutes before dispatch. A failed refresh returns `token_expired` without calling the SaaS API.
 
+### Vault cache and refresh
+
+Vault reads cache decrypted access and refresh tokens in process memory.
+The default TTL is `60s`, with an LRU limit of 10,000 user-service pairs.
+An entry expires earlier when its token reaches 30 seconds before expiry.
+Tokens without an expiry use the TTL alone.
+Tokens already within that 30-second window aren't cached.
+
+Token strings cannot be reliably zeroed. Keep the cache bounded.
+Delete drops cached references. Go may retain string bytes until garbage collection.
+Expired entries aren't reused. Lookup or eviction removes their cached references.
+Put writes SQLite before caching the new token. Failed writes invalidate the local entry.
+All writes must pass through the decorated store.
+
+Concurrent refreshes share one result per store and user-service pair within a process.
+Current waiters share refresh failures. Later calls retry.
+Canceling a waiter doesn't cancel the shared refresh.
+Replicas maintain separate caches and refresh independently.
+Rotating refresh tokens still need cross-process coordination when replicas share credentials.
+External writes or deletes can leave stale local credentials until cache expiry.
+Set `AGENTGATE_VAULT_CACHE_TTL=0` to disable plaintext caching. Refresh sharing remains enabled.
+
 ## Configuration
 
 ### Environment Variables
@@ -312,6 +334,7 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `AGENTGATE_VAULT_KEY` | 32-byte vault key. Also derives receipt encryption keys and the API-key HMAC pepper. | Yes |
+| `AGENTGATE_VAULT_CACHE_TTL` | Decrypted-token cache duration. Default `60s`; `0` disables caching. Negative or invalid durations stop startup. | No |
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |

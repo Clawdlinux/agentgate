@@ -96,9 +96,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	vaultStore, err := vault.NewSQLiteStore(database, masterKey)
+	sqliteVault, err := vault.NewSQLiteStore(database, masterKey)
 	if err != nil {
 		logger.Error("init vault", "error", err)
+		os.Exit(1)
+	}
+	vaultCacheTTL, err := loadVaultCacheTTL()
+	if err != nil {
+		logger.Error("load vault cache TTL", "error", err)
+		os.Exit(1)
+	}
+	vaultStore, err := vault.NewCachedStore(sqliteVault, vault.WithCacheTTL(vaultCacheTTL))
+	if err != nil {
+		logger.Error("init vault cache", "error", err)
 		os.Exit(1)
 	}
 
@@ -271,6 +281,18 @@ func loadAPIKeyCacheTTL() (time.Duration, error) {
 	ttl, err := time.ParseDuration(value)
 	if err != nil || ttl < 0 {
 		return 0, fmt.Errorf("AGENTGATE_API_KEY_CACHE_TTL must be a non-negative duration")
+	}
+	return ttl, nil
+}
+
+func loadVaultCacheTTL() (time.Duration, error) {
+	value, set := os.LookupEnv("AGENTGATE_VAULT_CACHE_TTL")
+	if !set {
+		return vault.DefaultCacheTTL, nil
+	}
+	ttl, err := time.ParseDuration(value)
+	if err != nil || ttl < 0 {
+		return 0, fmt.Errorf("AGENTGATE_VAULT_CACHE_TTL must be a non-negative duration")
 	}
 	return ttl, nil
 }
