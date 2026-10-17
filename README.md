@@ -324,6 +324,8 @@ Current waiters share refresh failures. Later calls retry.
 Canceling a waiter doesn't cancel the shared refresh.
 Each shared refresh has a separate `15s` deadline. OAuth HTTP exchanges also have a `15s` client timeout.
 Refresh functions receive that context and must honor cancellation.
+Successful exchanges still persist their results after the refresh deadline. That deadline doesn't cancel persistence retries.
+Shared refresh panics return a fixed error without panic values. The flight is cleared so later requests can retry.
 Timeouts and canceled waits return HTTP `504` with receipt error code `vault_refresh_timeout`, not `token_expired`.
 Refresh writes compare the stored refresh token inside a SQLite transaction.
 Deleted credentials stay deleted. A concurrent re-link keeps its replacement token and scopes.

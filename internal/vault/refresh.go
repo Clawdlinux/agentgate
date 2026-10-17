@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// DefaultRefreshTimeout bounds each shared OAuth refresh.
+// DefaultRefreshTimeout sets the shared OAuth exchange deadline.
 const DefaultRefreshTimeout = 15 * time.Second
 
 // RefreshFunc exchanges a refresh token. It must honor context cancellation.
@@ -56,13 +56,19 @@ func getOrRefresh(ctx context.Context, store Store, userID, service string, refr
 		call = &refreshCall{done: make(chan struct{})}
 		refreshFlights.calls[key] = call
 		go func() {
+			defer func() {
+				if recover() != nil {
+					call.token, call.err = Token{}, fmt.Errorf("vault: refresh panicked")
+					slog.Error("vault refresh panicked")
+				}
+				refreshFlights.Lock()
+				delete(refreshFlights.calls, key)
+				close(call.done)
+				refreshFlights.Unlock()
+			}()
 			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 			defer cancel()
 			call.token, call.err = refreshToken(refreshCtx, store, userID, service, refreshFn)
-			refreshFlights.Lock()
-			delete(refreshFlights.calls, key)
-			close(call.done)
-			refreshFlights.Unlock()
 		}()
 	}
 	refreshFlights.Unlock()
@@ -101,10 +107,6 @@ func refreshToken(ctx context.Context, store Store, userID, service string, refr
 	if err != nil {
 		return Token{}, fmt.Errorf("vault: refresh failed for %s:%s. User must re-link: %w", userID, service, err)
 	}
-	if err := ctx.Err(); err != nil {
-		return Token{}, err
-	}
-
 	tok.AccessToken = newAccess
 	if newRefresh != "" {
 		tok.RefreshToken = newRefresh
@@ -121,9 +123,6 @@ func refreshToken(ctx context.Context, store Store, userID, service string, refr
 		updated, err := store.CompareAndPut(userID, service, expectedRefresh, tok)
 		if err != nil {
 			writeErr = err
-			if ctx.Err() != nil {
-				return Token{}, ctx.Err()
-			}
 			continue
 		}
 		if updated {
