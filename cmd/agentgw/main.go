@@ -249,8 +249,8 @@ func loadBiscuitLimits() (delegation.Limits, error) {
 		return limits, nil
 	}
 	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return delegation.Limits{}, fmt.Errorf("AGENTGATE_BISCUIT_MAX_DURATION must be a positive Go duration (for example 250ms)")
+	if err != nil || duration < time.Millisecond || duration > 5*time.Second {
+		return delegation.Limits{}, fmt.Errorf("AGENTGATE_BISCUIT_MAX_DURATION must be a Go duration between 1ms and 5s (inclusive)")
 	}
 	limits.MaxDuration = duration
 	return limits, nil

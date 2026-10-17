@@ -24,11 +24,13 @@ import (
 // registry, vault, or upstream access.
 var ErrDenied = errors.New("delegation: denied")
 
-// Limits bounds each Datalog world run during authorization and grant queries.
+// Limits bounds token structure and each Datalog world run.
 type Limits struct {
 	MaxDuration   time.Duration
 	MaxFacts      int
 	MaxIterations int
+	MaxTokenBytes int
+	MaxBlocks     int
 }
 
 // DefaultLimits returns bounds for AgentGate's small delegation tokens.
@@ -39,6 +41,8 @@ func DefaultLimits() Limits {
 		MaxDuration:   250 * time.Millisecond,
 		MaxFacts:      1000,
 		MaxIterations: 100,
+		MaxTokenBytes: 4096,
+		MaxBlocks:     8,
 	}
 }
 
@@ -46,7 +50,7 @@ func DefaultLimits() Limits {
 type VerifierOption func(*Verifier)
 
 // WithLimits overrides nonzero limits. Zero fields retain their defaults.
-// Negative limits fail closed when the Datalog world runs.
+// Negative limits fail closed.
 func WithLimits(limits Limits) VerifierOption {
 	return func(v *Verifier) {
 		if limits.MaxDuration != 0 {
@@ -58,13 +62,20 @@ func WithLimits(limits Limits) VerifierOption {
 		if limits.MaxIterations != 0 {
 			v.limits.MaxIterations = limits.MaxIterations
 		}
+		if limits.MaxTokenBytes != 0 {
+			v.limits.MaxTokenBytes = limits.MaxTokenBytes
+		}
+		if limits.MaxBlocks != 0 {
+			v.limits.MaxBlocks = limits.MaxBlocks
+		}
 	}
 }
 
 // Verifier checks a presented Biscuit token against one root public key.
 type Verifier struct {
-	rootPublicKey ed25519.PublicKey
-	limits        Limits
+	rootPublicKey     ed25519.PublicKey
+	limits            Limits
+	authorizerFactory func(*biscuit.Biscuit) (biscuit.Authorizer, error)
 }
 
 // NewVerifier returns a Verifier trusting exactly one root public key.
@@ -73,11 +84,13 @@ func NewVerifier(rootPublicKey ed25519.PublicKey, opts ...VerifierOption) *Verif
 	for _, opt := range opts {
 		opt(v)
 	}
+	v.authorizerFactory = v.newAuthorizer
 	return v
 }
 
 func (v *Verifier) newAuthorizer(b *biscuit.Biscuit) (biscuit.Authorizer, error) {
 	// Biscuit clones these limits into attenuation worlds. Query reruns the same world.
+	// TODO: Revisit timeout handling after biscuit-go fixes its unbuffered-channel goroutine leak.
 	return b.Authorizer(v.rootPublicKey, biscuit.WithWorldOptions(
 		datalog.WithMaxDuration(v.limits.MaxDuration),
 		datalog.WithMaxFacts(v.limits.MaxFacts),
@@ -96,23 +109,23 @@ func (v *Verifier) newAuthorizer(b *biscuit.Biscuit) (biscuit.Authorizer, error)
 // text (DELG-03). A token with only its authority block (no attenuation)
 // returns a nil chain: a direct grant (DELG-04).
 //
-// A block appended by whoever is holding the token (not the root) can
-// itself carry facts, including a same-named grant(...) fact — Biscuit's
-// authorization world sees every block's facts together by default. Verify
-// closes that gap explicitly: after the Datalog policy matches, it
-// requires the grant fact that satisfied it to originate from block 0
-// (the authority block signed by root), via Biscuit.GetBlockID. A grant
-// fact injected by any later, holder-appended block is rejected even if it
-// would otherwise satisfy the policy — this is what defeats an attacker
-// splicing a wider or differently-scoped grant claim into a token they
-// hold (DELG-05).
+// Structural checks reject holder-appended facts and rules before constructing the authorizer.
+// Authority contains exactly 1 grant fact. Checks have bounded predicate counts.
+// The matched grant must also originate in block 0, as confirmed by Biscuit.GetBlockID (DELG-05).
 func (v *Verifier) Verify(token []byte, humanPrincipal, agentKeyID, service, action string, now time.Time) ([]string, error) {
+	if len(token) > v.limits.MaxTokenBytes {
+		return nil, denyTokenShape("token exceeds byte limit")
+	}
 	b, err := biscuit.Unmarshal(token)
 	if err != nil {
 		return nil, fmt.Errorf("%w: unmarshal: %v", ErrDenied, err)
 	}
 
-	authorizer, err := v.newAuthorizer(b)
+	if err := v.checkTokenShape(token, b); err != nil {
+		return nil, err
+	}
+
+	authorizer, err := v.authorizerFactory(b)
 	if err != nil {
 		return nil, fmt.Errorf("%w: signature chain: %v", ErrDenied, err)
 	}

@@ -8,6 +8,7 @@ package delegation
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -226,9 +227,9 @@ func TestVerify_WideningViaAppendedFakeGrantFactRejected(t *testing.T) {
 		t.Fatal("expected a holder-appended grant fact to be rejected, not treated as authoritative")
 	}
 
-	// The original, unwidened scope must still work.
-	if _, err := v.Verify(widened, "alice", "agent-B", "slack", "post_message", time.Now()); err != nil {
-		t.Fatalf("the token's real, root-granted scope should still verify: %v", err)
+	// Holder-appended facts invalidate the token, even for its original scope.
+	if _, err := v.Verify(widened, "alice", "agent-B", "slack", "post_message", time.Now()); !errors.Is(err, ErrTokenShape) {
+		t.Fatalf("Verify error = %v, want ErrTokenShape", err)
 	}
 }
 

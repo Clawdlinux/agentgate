@@ -64,12 +64,9 @@ func Issue(rootPriv ed25519.PrivateKey, grant Grant) ([]byte, error) {
 	return token, nil
 }
 
-// Attenuate appends one restricting block to an existing token — the
-// attenuation path a delegating agent adds when it hands narrower
-// authority to a sub-agent. checkDatalog must contain only `check if`
-// clauses: Biscuit blocks may only narrow, never grant new authority
-// (that authority lives solely in the authority block's grant fact, and
-// Verify's GetBlockID check rejects any grant fact found outside block 0).
+// Attenuate appends 1 restricting block to an existing token.
+// checkDatalog must contain only `check if` clauses.
+// Verify rejects appended facts and rules before authorization.
 func Attenuate(token []byte, checkDatalog string) ([]byte, error) {
 	b, err := biscuit.Unmarshal(token)
 	if err != nil {

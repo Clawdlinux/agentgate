@@ -20,12 +20,14 @@ func TestNewVerifier_Limits(t *testing.T) {
 	pub, _ := testKeypair(t)
 	defaults := Limits{
 		MaxDuration: 250 * time.Millisecond, MaxFacts: 1000, MaxIterations: 100,
+		MaxTokenBytes: 4096, MaxBlocks: 8,
 	}
 	if got := DefaultLimits(); got != defaults {
 		t.Fatalf("DefaultLimits = %+v, want %+v", got, defaults)
 	}
 	custom := Limits{
 		MaxDuration: 500 * time.Millisecond, MaxFacts: 20, MaxIterations: 3,
+		MaxTokenBytes: 2048, MaxBlocks: 2,
 	}
 	for _, tc := range []struct {
 		name string
@@ -36,7 +38,8 @@ func TestNewVerifier_Limits(t *testing.T) {
 		{"custom", []VerifierOption{WithLimits(custom)}, custom},
 		{"zero keeps defaults", []VerifierOption{WithLimits(Limits{})}, defaults},
 		{"partial", []VerifierOption{WithLimits(Limits{MaxFacts: 2})},
-			Limits{MaxDuration: defaults.MaxDuration, MaxFacts: 2, MaxIterations: defaults.MaxIterations}},
+			Limits{MaxDuration: defaults.MaxDuration, MaxFacts: 2, MaxIterations: defaults.MaxIterations,
+				MaxTokenBytes: defaults.MaxTokenBytes, MaxBlocks: defaults.MaxBlocks}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := NewVerifier(pub, tc.opts...).limits; got != tc.want {
@@ -57,7 +60,7 @@ func TestVerify_LimitExceededDenied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err = Attenuate(token, `seed(0); derived($n) <- seed($n); check if derived(0);`)
+	token, err = Attenuate(token, `check if true;`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +74,6 @@ func TestVerify_LimitExceededDenied(t *testing.T) {
 		cause  error
 	}{
 		{"authority facts", Limits{MaxFacts: 1}, datalog.ErrWorldRunLimitMaxFacts},
-		{"attenuation facts", Limits{MaxFacts: 3}, datalog.ErrWorldRunLimitMaxFacts},
-		{"attenuation iterations", Limits{MaxIterations: 1}, datalog.ErrWorldRunLimitMaxIterations},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			chain, err := NewVerifier(pub, WithLimits(tc.limits)).
@@ -96,6 +97,31 @@ func TestVerify_LimitExceededDenied(t *testing.T) {
 		if errors.Is(err, cause) {
 			t.Fatalf("policy denial misclassified as a limit: %v", err)
 		}
+	}
+}
+
+func TestVerifier_AuthorizerIterationLimit(t *testing.T) {
+	t.Parallel()
+	pub, priv := testKeypair(t)
+	block, err := parser.FromStringBlock(`seed(0); derived($n) <- seed($n);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := biscuit.NewBuilder(priv)
+	if err := builder.AddBlock(block); err != nil {
+		t.Fatal(err)
+	}
+	b, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := NewVerifier(pub, WithLimits(Limits{MaxIterations: 1})).newAuthorizer(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer.AddPolicy(biscuit.DefaultAllowPolicy)
+	if err := authorizer.Authorize(); !errors.Is(err, datalog.ErrWorldRunLimitMaxIterations) {
+		t.Fatalf("Authorize error = %v, want the configured iteration limit", err)
 	}
 }
 

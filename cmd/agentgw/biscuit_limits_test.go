@@ -25,7 +25,11 @@ func TestLoadBiscuitLimits(t *testing.T) {
 		{"50ms", 50 * time.Millisecond, false},
 		{"250ms", 250 * time.Millisecond, false},
 		{"1s", time.Second, false},
-		{"1us", time.Microsecond, false},
+		{"1ms", time.Millisecond, false},
+		{"5s", 5 * time.Second, false},
+		{"999999ns", 0, true},
+		{"5.000000001s", 0, true},
+		{"1us", 0, true},
 		{"0", 0, true},
 		{"0s", 0, true},
 		{"-1s", 0, true},
@@ -38,7 +42,7 @@ func TestLoadBiscuitLimits(t *testing.T) {
 			t.Setenv("AGENTGATE_BISCUIT_MAX_DURATION", tc.value)
 			got, err := loadBiscuitLimits()
 			if tc.fail {
-				if err == nil || !strings.Contains(err.Error(), "AGENTGATE_BISCUIT_MAX_DURATION must be a positive Go duration") {
+				if err == nil || !strings.Contains(err.Error(), "AGENTGATE_BISCUIT_MAX_DURATION must be a Go duration between 1ms and 5s") {
 					t.Fatalf("limits = %+v, error = %v, want a clear duration error", got, err)
 				}
 				return
@@ -68,19 +72,23 @@ func TestAgentgwRejectsInvalidBiscuitDuration(t *testing.T) {
 		main()
 		return
 	}
-	t.Setenv(helper, "1")
-	t.Setenv("AGENTGATE_BISCUIT_MAX_DURATION", "do-not-echo-this-value")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentgwRejectsInvalidBiscuitDuration$")
-	cmd.Dir = t.TempDir()
-	output, err := cmd.CombinedOutput()
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-		t.Fatalf("startup error = %v, output = %s, want exit code 1", err, output)
-	}
-	if !strings.Contains(string(output), "AGENTGATE_BISCUIT_MAX_DURATION must be a positive Go duration") {
-		t.Fatalf("startup omitted the configuration error: %s", output)
-	}
-	if strings.Contains(string(output), "do-not-echo-this-value") {
-		t.Fatalf("startup echoed the configured value: %s", output)
+	for _, value := range []string{"do-not-echo-this-value", "999999ns", "5.000000001s"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(helper, "1")
+			t.Setenv("AGENTGATE_BISCUIT_MAX_DURATION", value)
+			cmd := exec.Command(os.Args[0], "-test.run=^TestAgentgwRejectsInvalidBiscuitDuration$")
+			cmd.Dir = t.TempDir()
+			output, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Fatalf("startup error = %v, output = %s, want exit code 1", err, output)
+			}
+			if !strings.Contains(string(output), "AGENTGATE_BISCUIT_MAX_DURATION must be a Go duration between 1ms and 5s") {
+				t.Fatalf("startup omitted the configuration error: %s", output)
+			}
+			if strings.Contains(string(output), value) {
+				t.Fatalf("startup echoed the configured value: %s", output)
+			}
+		})
 	}
 }
