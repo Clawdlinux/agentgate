@@ -69,7 +69,9 @@ See [decision-architecture.md](https://github.com/Clawdlinux/agentic-operator-co
 ### 3.2 Auth Middleware (`internal/auth/`)
 - Agent authenticates with an API key (header: `X-AgentGate-Key`)
 - API keys are scoped: which services, which users, what actions
-- Keys stored in SQLite (MVP) with bcrypt hashes
+- SQLite stores indexed key IDs and peppered HMAC-SHA256 values.
+- New keys use `agk_<keyid>_<secret>` with lowercase hex components.
+- Legacy `ag_live_` keys retain bcrypt validation. See [API keys](docs/api-keys.md).
 
 ### 3.3 Service Router (`internal/router/`)
 - Maps `service` + `action` to upstream URL + method
@@ -122,11 +124,17 @@ CREATE TABLE agent_keys (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL,
+    key_id TEXT,
+    key_hmac BLOB,
+    legacy_lookup BLOB,
     allowed_services TEXT NOT NULL, -- JSON array
     allowed_users TEXT NOT NULL,    -- JSON array or "*"
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     revoked_at DATETIME
 );
+
+CREATE UNIQUE INDEX idx_agent_keys_key_id ON agent_keys(key_id);
+CREATE UNIQUE INDEX idx_agent_keys_legacy_lookup ON agent_keys(legacy_lookup);
 
 -- OAuth tokens (encrypted)
 CREATE TABLE tokens (
@@ -185,7 +193,7 @@ CREATE TABLE audit_log (
 ```
 1. Agent sends:
    POST /v1/act
-   X-AgentGate-Key: ag_live_abc123
+   X-AgentGate-Key: agk_<keyid>_<secret>
    {
      "service": "github",
      "action": "GET /repos/{owner}/{repo}/issues",
@@ -438,7 +446,7 @@ services:
   "allowed_users": ["user-42", "user-99"]
 }
 ```
-→ Returns `{ "key": "ag_live_..." }` (shown once)
+Returns `{ "key": "agk_<keyid>_<secret>" }`. Shown once.
 
 ---
 

@@ -46,7 +46,7 @@ func WithTimeout(d time.Duration) Option {
 
 // NewClient creates a new AgentGate SDK client.
 //
-//	client := sdk.NewClient("http://localhost:8080", "ag_live_...")
+//	client := sdk.NewClient("http://localhost:8080", "agk_<keyid>_<secret>")
 func NewClient(baseURL, apiKey string, opts ...Option) *Client {
 	c := &Client{
 		baseURL:    baseURL,

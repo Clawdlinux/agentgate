@@ -28,8 +28,13 @@ It bootstraps one agent API key on first boot and logs it once:
 
 ```bash
 docker logs agentgate | grep agent_key
-# {"agent_key":"ag_live_..."} — save this, it is never shown again
+# {"agent_key":"agk_<keyid>_<secret>"}
+# Save this. It is never shown again.
 ```
+
+New keys use lowercase hex: `agk_<keyid>_<secret>`. The ID contains 16 random bytes. The secret contains 32 random bytes.
+Existing `ag_live_` keys still work, but are deprecated. Replace them through `POST /admin/keys`.
+See [API key storage and migration](docs/api-keys.md) for details.
 
 **Call an action.** Without a linked account this returns `token_missing` —
 the point being that a receipt is still committed for the *attempt*, not
@@ -242,7 +247,7 @@ OAuth redirect handler — exchanges code for tokens, stores encrypted in vault.
 ```go
 import "github.com/Clawdlinux/agentgate/pkg/sdk"
 
-client := sdk.NewClient("http://localhost:8080", "ag_live_...")
+client := sdk.NewClient("http://localhost:8080", "agk_<keyid>_<secret>")
 
 // Call any service
 resp, err := client.Act(ctx, sdk.ActRequest{
@@ -288,15 +293,19 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `AGENTGATE_VAULT_KEY` | 32-byte encryption key for the token vault and the receipt signing key | Yes |
+| `AGENTGATE_VAULT_KEY` | 32-byte vault key. Also derives receipt encryption keys and the API-key HMAC pepper. | Yes |
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
+| `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
 | `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google OAuth credentials, requesting only the narrow `gmail.labels` scope | For Google Workspace OAuth |
 | `STRIPE_CLIENT_ID` / `STRIPE_CLIENT_SECRET` | Stripe OAuth credentials (Stripe remains configured and functional, just not a featured launch connector) | For Stripe OAuth |
 
-Agent API keys are bootstrapped automatically on first boot and logged once — there is no env var for a pre-supplied key (they are bcrypt-hashed in SQLite; see `POST /admin/keys` to create more).
+Agent API keys are bootstrapped on first boot and logged once. There is no environment variable for a pre-supplied key.
+SQLite stores a public ID and a peppered HMAC-SHA256, never the secret. Use `POST /admin/keys` to create more.
+Legacy `ag_live_` rows keep their bcrypt hashes. Successful validation adds an indexed HMAC without changing the presented key.
+Revoked rows never enter legacy bcrypt scans.
 
 ### Service Configs
 
@@ -307,7 +316,7 @@ Service configurations are YAML files in `configs/services/`. See `configs/servi
 - **Go 1.22+** — single binary, no runtime dependencies
 - **SQLite** — embedded database for keys, tokens, audit log
 - **AES-256-GCM** — token encryption at rest
-- **bcrypt** — API key hashing
+- **HMAC-SHA256** for API key verification. bcrypt remains for legacy keys.
 - **Docker** — containerized deployment
 
 ## Development

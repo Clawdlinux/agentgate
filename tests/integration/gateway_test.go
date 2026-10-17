@@ -93,8 +93,18 @@ services:
 		t.Fatal(err)
 	}
 
-	keyStore := auth.NewKeyStore(database)
-	_, apiKey, _ := keyStore.Create(t.Context(), "test-agent", []string{"*"}, []string{"*"})
+	pepper, err := auth.DeriveKeyPepper(masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyStore, err := auth.NewKeyStore(database, pepper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiKey, err := keyStore.Create(t.Context(), "test-agent", []string{"*"}, []string{"*"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_ = vaultStore.Put("user-42", "github", vault.Token{
 		AccessToken: "ghp_test_token",
