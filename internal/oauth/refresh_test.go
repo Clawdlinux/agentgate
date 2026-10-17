@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +39,7 @@ func TestNewRefreshFuncExchangesAndRotatesToken(t *testing.T) {
 		TokenURL:     server.URL,
 	})
 
-	access, rotated, expiresIn, err := refresh("old-refresh")
+	access, rotated, expiresIn, err := refresh(context.Background(), "old-refresh")
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

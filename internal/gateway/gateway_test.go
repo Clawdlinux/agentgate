@@ -468,7 +468,7 @@ services:
 		}},
 		Receipts: &fakeReceipts{},
 		Refreshers: map[string]vault.RefreshFunc{
-			"github": func(refreshToken string) (string, string, time.Duration, error) {
+			"github": func(_ context.Context, refreshToken string) (string, string, time.Duration, error) {
 				if refreshToken != "refresh-token" {
 					t.Errorf("refresh token = %q, want stored refresh token", refreshToken)
 				}
@@ -508,7 +508,7 @@ func TestAct_RefreshFailureBlocksDispatchAndIsReceipted(t *testing.T) {
 		ExpiresAt:    time.Now().Add(-time.Minute),
 	})
 	srv.cfg.Refreshers = map[string]vault.RefreshFunc{
-		"github": func(string) (string, string, time.Duration, error) {
+		"github": func(context.Context, string) (string, string, time.Duration, error) {
 			return "", "", 0, errors.New("provider rejected refresh token")
 		},
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -124,6 +125,62 @@ func (s *SQLiteStore) Get(userID, service string) (Token, error) {
 	}
 
 	return tok, nil
+}
+
+func (s *SQLiteStore) CompareAndPut(userID, service, expectedRefreshToken string, tok Token) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var previousRefresh []byte
+	err = tx.QueryRow(`SELECT refresh_token_enc FROM tokens WHERE user_id = ? AND service = ?`,
+		userID, service).Scan(&previousRefresh)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: read: %w", err)
+	}
+	var refreshPlain []byte
+	if len(previousRefresh) > 0 {
+		refreshPlain, err = s.decrypt(previousRefresh)
+		if err != nil {
+			return false, fmt.Errorf("vault.CompareAndPut: decrypt refresh: %w", err)
+		}
+	}
+	if string(refreshPlain) != expectedRefreshToken {
+		return false, nil
+	}
+	accessEnc, err := s.encrypt([]byte(tok.AccessToken))
+	if err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: encrypt access: %w", err)
+	}
+	var refreshEnc []byte
+	if tok.RefreshToken != "" {
+		refreshEnc, err = s.encrypt([]byte(tok.RefreshToken))
+		if err != nil {
+			return false, fmt.Errorf("vault.CompareAndPut: encrypt refresh: %w", err)
+		}
+	}
+	scopesJSON, _ := json.Marshal(tok.Scopes)
+	// Fresh encryption changes the ciphertext on each write. Match the snapshot as an additional CAS guard.
+	result, err := tx.Exec(`UPDATE tokens SET access_token_enc = ?, refresh_token_enc = ?,
+		expires_at = ?, scopes = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND service = ? AND refresh_token_enc IS ?`,
+		accessEnc, refreshEnc, tok.ExpiresAt, string(scopesJSON), userID, service, previousRefresh)
+	if err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: update: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("vault.CompareAndPut: commit: %w", err)
+	}
+	return rows == 1, nil
 }
 
 func (s *SQLiteStore) Delete(userID, service string) error {

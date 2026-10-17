@@ -457,8 +457,16 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 	if refresher := s.cfg.Refreshers[att.req.Service]; refresher != nil {
-		tok, err = vault.GetOrRefresh(s.cfg.Vault, att.req.OnBehalfOf, att.req.Service, refresher)
+		tok, err = vault.GetOrRefresh(ctx, s.cfg.Vault, att.req.OnBehalfOf, att.req.Service, refresher)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return &outcome{
+					status:         http.StatusGatewayTimeout,
+					body:           ErrorResponse{Error: "vault refresh timed out or was canceled", Code: "vault_refresh_timeout"},
+					policyDecision: "allow",
+					errorCode:      "vault_refresh_timeout",
+				}
+			}
 			return &outcome{
 				status:         http.StatusForbidden,
 				body:           ErrorResponse{Error: "token expired — user must re-authenticate", Code: "token_expired"},

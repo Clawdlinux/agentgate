@@ -1,8 +1,10 @@
 package oauth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -32,6 +34,12 @@ type CallbackHandler struct {
 	callbackBase string
 	logger       *slog.Logger
 }
+
+var linkedPage = template.Must(template.New("linked").Parse(`<!DOCTYPE html>
+<html><body>
+<h2>Account linked!</h2>
+<p>Your {{.}} account has been connected. You can close this tab.</p>
+</body></html>`))
 
 // NewCallbackHandler creates a new OAuth callback handler.
 func NewCallbackHandler(providers map[string]*Provider, v vault.Store, encKey []byte, callbackBase string, logger *slog.Logger) *CallbackHandler {
@@ -118,7 +126,7 @@ func (h *CallbackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for tokens.
-	tok, err := h.exchangeCode(provider, code, service)
+	tok, err := h.exchangeCode(r.Context(), provider, code, service)
 	if err != nil {
 		h.logger.Error("oauth code exchange failed", "service", service, "error", err)
 		http.Error(w, "token exchange failed", http.StatusInternalServerError)
@@ -135,14 +143,12 @@ func (h *CallbackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("oauth linked", "user", userID, "service", service)
 
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><body>
-<h2>Account linked!</h2>
-<p>Your %s account has been connected. You can close this tab.</p>
-</body></html>`, service)
+	if err := linkedPage.Execute(w, service); err != nil {
+		h.logger.Error("render oauth callback", "error", err)
+	}
 }
 
-func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string) (*vault.Token, error) {
+func (h *CallbackHandler) exchangeCode(ctx context.Context, provider *Provider, code, service string) (*vault.Token, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -150,7 +156,7 @@ func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string)
 		"client_secret": {provider.ClientSecret},
 		"redirect_uri":  {h.callbackBase + "/auth/callback/" + service},
 	}
-	tok, _, err := exchangeToken(provider, data)
+	tok, _, err := exchangeToken(ctx, provider, data)
 	return tok, err
 }
 
@@ -158,8 +164,8 @@ func (h *CallbackHandler) exchangeCode(provider *Provider, code, service string)
 // provider. It returns an error when the provider omits an expiry because the
 // caller must not persist a token that will immediately be treated as expired.
 func NewRefreshFunc(provider *Provider) vault.RefreshFunc {
-	return func(refreshToken string) (string, string, time.Duration, error) {
-		tok, expiresIn, err := exchangeToken(provider, url.Values{
+	return func(ctx context.Context, refreshToken string) (string, string, time.Duration, error) {
+		tok, expiresIn, err := exchangeToken(ctx, provider, url.Values{
 			"grant_type":    {"refresh_token"},
 			"refresh_token": {refreshToken},
 			"client_id":     {provider.ClientID},
@@ -175,14 +181,24 @@ func NewRefreshFunc(provider *Provider) vault.RefreshFunc {
 	}
 }
 
-func exchangeToken(provider *Provider, data url.Values) (*vault.Token, time.Duration, error) {
-	resp, err := http.PostForm(provider.TokenURL, data)
+var tokenHTTPClient = &http.Client{Timeout: vault.DefaultRefreshTimeout}
+
+func exchangeToken(ctx context.Context, provider *Provider, data url.Values) (*vault.Token, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, 0, fmt.Errorf("oauth: create exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("oauth: exchange: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, 0, fmt.Errorf("oauth: read token response: %w", err)
+	}
 
 	if resp.StatusCode != 200 {
 		return nil, 0, fmt.Errorf("oauth: exchange returned %d: %s", resp.StatusCode, string(body))
