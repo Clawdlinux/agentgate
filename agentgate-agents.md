@@ -48,7 +48,7 @@ Create the complete project scaffold at ~/clawdlinux/agentgate:
    - github.com/go-chi/chi/v5 (router)
    - github.com/mattn/go-sqlite3 (database)
    - gopkg.in/yaml.v3 (config)
-   - golang.org/x/crypto (bcrypt for key hashing)
+   - golang.org/x/crypto (HKDF for API-key pepper derivation, bcrypt for legacy keys)
    - github.com/rs/zerolog (structured logging)
 
 4. Create Makefile with targets:
@@ -254,9 +254,10 @@ Implement API key auth, OAuth callback handling, and admin endpoints.
        CreatedAt       time.Time
        RevokedAt       *time.Time
      }
-   - func GenerateKey() (plaintext string, hash string, err error)
-     - Format: "ag_live_" + 32 random hex chars
-     - Hash with bcrypt
+   - func GenerateKey() (plaintext string, keyID string, err error)
+     - Format: `agk_<keyid>_<secret>`. Lowercase hex encodes 16 ID bytes and 32 secret bytes.
+     - Store an indexed ID and HMAC-SHA256. Derive the pepper from the vault key with HKDF.
+     - Legacy `ag_live_` keys retain bcrypt validation. See [API keys](docs/api-keys.md).
    - func (s *KeyStore) Create(ctx, name, services, users) (*AgentKey, plaintext, error)
    - func (s *KeyStore) Validate(ctx, plaintext) (*AgentKey, error)
    - func (s *KeyStore) Revoke(ctx, keyID) error

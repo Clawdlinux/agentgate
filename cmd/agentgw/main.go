@@ -91,7 +91,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	keyStore := auth.NewKeyStore(database)
+	pepper, err := auth.DeriveKeyPepper(masterKey)
+	if err != nil {
+		logger.Error("derive API key pepper", "error", err)
+		os.Exit(1)
+	}
+	keyStore, err := auth.NewKeyStore(database, pepper)
+	if err != nil {
+		logger.Error("init API key store", "error", err)
+		os.Exit(1)
+	}
 	if err := bootstrapAgentKey(context.Background(), keyStore, logger); err != nil {
 		logger.Error("bootstrap agent key", "error", err)
 		os.Exit(1)
@@ -216,8 +225,8 @@ func main() {
 	}
 }
 
-// loadMasterKey reads the 32-byte master secret used to derive both the
-// vault's token-encryption key and the signer's storage-encryption key.
+// loadMasterKey reads the 32-byte master secret for the vault.
+// It also derives the signer's encryption key and the API-key HMAC pepper.
 // AGENTGATE_VAULT_KEY is the name docker-compose.yaml and .env.example
 // already document; the previous VAULT_ENCRYPTION_KEY read in this command
 // never matched either file.
@@ -229,13 +238,9 @@ func loadMasterKey() ([]byte, error) {
 	return []byte(envKey), nil
 }
 
-// bootstrapAgentKey creates one agent API key on an empty database and
-// logs its plaintext value once. There is no import path for an
-// externally supplied plaintext key under the bcrypt-hashed key store, so
-// the previous AGENT_API_KEY env var — a plaintext MVP map lookup — has no
-// equivalent here; an operator now retrieves the bootstrap key from this
-// one-time log line, or an admin API caller creates additional keys via
-// internal/auth.KeyStore.Create.
+// bootstrapAgentKey creates an agent API key on an empty database and logs it once.
+// There is no environment variable for importing a plaintext key.
+// Retrieve the bootstrap key from this log, or create additional keys through the admin API.
 func bootstrapAgentKey(ctx context.Context, keyStore *auth.KeyStore, logger *slog.Logger) error {
 	count, err := keyStore.Count(ctx)
 	if err != nil {

@@ -353,11 +353,13 @@ endpoints:
 Create `internal/auth/`, `internal/oauth/`, `internal/admin/` packages.
 
 `internal/auth/keys.go`:
-- Generate API key: `"ag_live_" + 32 random hex chars`
-- Hash with bcrypt (cost 10)
-- `KeyStore` struct with db
+- Generate API key: `agk_<keyid>_<secret>`. Lowercase hex encodes 16 ID bytes and 32 secret bytes.
+- Store HMAC-SHA256 with a pepper derived from the vault key through HKDF.
+- Migration 005 adds nullable `key_id` and `key_hmac` columns, plus a unique index on `key_id`.
+- `NewKeyStore(db, pepper, options...)` configures the database and verified-key LRU cache.
 - `Create(ctx, name, allowedServices, allowedUsers) (key *AgentKey, plaintext string, error)`
-- `Validate(ctx, plaintext string) (*AgentKey, error)` — scan all non-revoked keys, bcrypt compare
+- `Validate(ctx, plaintext string) (*AgentKey, error)` performs 1 indexed lookup and an HMAC comparison.
+- Legacy `ag_live_` keys retain bcrypt validation. See [API keys](docs/api-keys.md).
 - `Revoke(ctx, keyID string) error`
 
 `internal/auth/middleware.go`:
@@ -477,7 +479,7 @@ import (
 )
 
 func main() {
-    client := sdk.NewClient("http://localhost:8080", "ag_live_your_key_here")
+    client := sdk.NewClient("http://localhost:8080", "agk_<keyid>_<secret>")
     
     resp, err := client.Stripe(context.Background(), "user-42", "GET /v1/invoices", map[string]interface{}{
         "limit": 10,

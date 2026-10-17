@@ -3,7 +3,7 @@
 // Usage:
 //
 //	export AGENTGATE_URL=http://localhost:8080
-//	export AGENTGATE_KEY=ag_live_...
+//	export AGENTGATE_KEY='agk_<keyid>_<secret>'
 //	go run ./examples/basic
 package main
 

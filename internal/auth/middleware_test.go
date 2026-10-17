@@ -1,42 +1,14 @@
 package auth
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
-
-func setupAuthTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`
-		CREATE TABLE agent_keys (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			key_hash TEXT NOT NULL,
-			allowed_services TEXT NOT NULL DEFAULT '["*"]',
-			allowed_users TEXT NOT NULL DEFAULT '["*"]',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			revoked_at DATETIME
-		)
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
 
 func TestMiddleware_ValidKey(t *testing.T) {
 	t.Parallel()
-	db := setupAuthTestDB(t)
-	store := NewKeyStore(db)
+	store := newTestKeyStore(t, testDB(t))
 
 	_, plaintext, err := store.Create(t.Context(), "test-agent", []string{"*"}, []string{"*"})
 	if err != nil {
@@ -66,8 +38,7 @@ func TestMiddleware_ValidKey(t *testing.T) {
 
 func TestMiddleware_InvalidKey(t *testing.T) {
 	t.Parallel()
-	db := setupAuthTestDB(t)
-	store := NewKeyStore(db)
+	store := newTestKeyStore(t, testDB(t))
 
 	handler := Middleware(store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
@@ -85,8 +56,7 @@ func TestMiddleware_InvalidKey(t *testing.T) {
 
 func TestMiddleware_MissingKey(t *testing.T) {
 	t.Parallel()
-	db := setupAuthTestDB(t)
-	store := NewKeyStore(db)
+	store := newTestKeyStore(t, testDB(t))
 
 	handler := Middleware(store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
@@ -103,8 +73,7 @@ func TestMiddleware_MissingKey(t *testing.T) {
 
 func TestMiddleware_RevokedKey(t *testing.T) {
 	t.Parallel()
-	db := setupAuthTestDB(t)
-	store := NewKeyStore(db)
+	store := newTestKeyStore(t, testDB(t))
 
 	key, plaintext, _ := store.Create(t.Context(), "revokable", []string{"*"}, []string{"*"})
 	_ = store.Revoke(t.Context(), key.ID)
@@ -125,8 +94,7 @@ func TestMiddleware_RevokedKey(t *testing.T) {
 
 func TestMiddleware_BearerAuth(t *testing.T) {
 	t.Parallel()
-	db := setupAuthTestDB(t)
-	store := NewKeyStore(db)
+	store := newTestKeyStore(t, testDB(t))
 
 	_, plaintext, _ := store.Create(t.Context(), "bearer-agent", []string{"*"}, []string{"*"})
 
