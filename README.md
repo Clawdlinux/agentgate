@@ -315,15 +315,38 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
+| `AGENTGATE_BISCUIT_MAX_DURATION` | Go duration per Biscuit Datalog world run. Default `250ms`; range `1ms` through `5s`, inclusive. Invalid values stop startup. | No |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth credentials | For GitHub OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth credentials | For Slack OAuth |
 | `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google OAuth credentials, requesting only the narrow `gmail.labels` scope | For Google Workspace OAuth |
 | `STRIPE_CLIENT_ID` / `STRIPE_CLIENT_SECRET` | Stripe OAuth credentials (Stripe remains configured and functional, just not a featured launch connector) | For Stripe OAuth |
 
+Biscuit verification caps each world run at 1000 facts and 100 iterations.
+These caps stay in code. The duration applies during authorization and the later grant query.
+Issued tokens contain 1 grant fact and no rules. Typical attenuation adds a few checks.
+The `250ms` default tolerates scheduler delays while keeping those work caps unchanged.
+Limit hits deny the request. `errors.Is` matches `delegation.ErrDenied` and the corresponding `datalog.ErrWorldRunLimit*` cause.
+
 Agent API keys are bootstrapped on first boot and logged once. There is no environment variable for a pre-supplied key.
 SQLite stores a public ID and a peppered HMAC-SHA256, never the secret. Use `POST /admin/keys` to create more.
 Legacy `ag_live_` rows keep their bcrypt hashes. Successful validation adds an indexed HMAC without changing the presented key.
 Revoked rows never enter legacy bcrypt scans.
+
+#### Biscuit token security caps
+
+Tokens are limited to 4096 bytes and 8 attenuation blocks.
+Authority contains exactly 1 `grant` fact with 4 strings and an expiry date. Authority rules are rejected.
+Attenuation blocks can contain checks only. Facts and rules are rejected.
+Each block permits at most 16 checks. Each check query body permits at most 4 predicates.
+Each query permits at most 8 expressions. Each expression permits at most 32 operations.
+Regex `.matches()` expressions are rejected because their compile and match work bypasses Datalog run limits.
+Authority checks follow the same caps.
+
+These checks run before authorizer construction. Rejections match both `delegation.ErrDenied` and `delegation.ErrTokenShape`.
+Errors contain fixed reasons, not token contents.
+The structural caps bound fact joins and block processing before the request reaches the rate limiter.
+Biscuit-go v2.2.0 deadlines do not cover check evaluation and cannot reliably stop timed-out goroutines.
+Runtime limits alone do not bound per-request CPU.
 
 ### Service Configs
 

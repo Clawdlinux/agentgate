@@ -8,6 +8,8 @@ package delegation
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -120,10 +122,11 @@ func TestVerify_AttenuatedGrantPreservesOrderedLineage(t *testing.T) {
 	t.Parallel()
 	pub, priv := testKeypair(t)
 	v := NewVerifier(pub)
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 	token, err := Issue(priv, Grant{
 		HumanPrincipal: "alice", AgentKeyID: "agent-1", Service: "github", Action: "list_repos",
-		Expiry: time.Now().Add(time.Hour),
+		Expiry: now.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
@@ -138,7 +141,7 @@ func TestVerify_AttenuatedGrantPreservesOrderedLineage(t *testing.T) {
 		t.Fatalf("Attenuate (2nd): %v", err)
 	}
 
-	chain, err := v.Verify(twice, "alice", "agent-1", "github", "list_repos", time.Now())
+	chain, err := v.Verify(twice, "alice", "agent-1", "github", "list_repos", now)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -157,6 +160,14 @@ func TestVerify_AttenuatedGrantPreservesOrderedLineage(t *testing.T) {
 	}
 	if chain[0] == chain[1] {
 		t.Fatal("two differently-worded attenuation blocks produced identical digests")
+	}
+	// These commit Biscuit's canonical Block wrappers, not the input check text.
+	want := []string{
+		"b4035886f33218e38e1e63bb58b7d94d0aff49857d848cd213c86eb417127632",
+		"fd86829eaff11906e1d0430d7cbd040bf35b40aae2f0f7ac5d4d4c78e6f1c7c7",
+	}
+	if !slices.Equal(chain, want) {
+		t.Fatalf("ordered lineage = %v, want %v", chain, want)
 	}
 }
 
@@ -216,9 +227,9 @@ func TestVerify_WideningViaAppendedFakeGrantFactRejected(t *testing.T) {
 		t.Fatal("expected a holder-appended grant fact to be rejected, not treated as authoritative")
 	}
 
-	// The original, unwidened scope must still work.
-	if _, err := v.Verify(widened, "alice", "agent-B", "slack", "post_message", time.Now()); err != nil {
-		t.Fatalf("the token's real, root-granted scope should still verify: %v", err)
+	// Holder-appended facts invalidate the token, even for its original scope.
+	if _, err := v.Verify(widened, "alice", "agent-B", "slack", "post_message", time.Now()); !errors.Is(err, ErrTokenShape) {
+		t.Fatalf("Verify error = %v, want ErrTokenShape", err)
 	}
 }
 

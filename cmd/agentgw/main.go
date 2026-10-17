@@ -57,6 +57,12 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
+	biscuitLimits, err := loadBiscuitLimits()
+	if err != nil {
+		logger.Error("load Biscuit limits", "error", err)
+		os.Exit(1)
+	}
+
 	// Load service registry.
 	reg := registry.New()
 	if err := reg.LoadFile(*configPath); err != nil {
@@ -147,7 +153,7 @@ func main() {
 		logger.Error("load or create delegation root key", "error", err)
 		os.Exit(1)
 	}
-	delegationVerifier := delegation.NewVerifier(rootPub)
+	delegationVerifier := delegation.NewVerifier(rootPub, delegation.WithLimits(biscuitLimits))
 	oauthProviders := buildOAuthProviders(reg, logger)
 
 	srv := gateway.New(gateway.Config{
@@ -233,6 +239,21 @@ func main() {
 		logger.Error("shutdown", "error", err)
 		_ = httpSrv.Close()
 	}
+}
+
+// loadBiscuitLimits reads the optional duration override without changing fact or iteration caps.
+func loadBiscuitLimits() (delegation.Limits, error) {
+	limits := delegation.DefaultLimits()
+	value, set := os.LookupEnv("AGENTGATE_BISCUIT_MAX_DURATION")
+	if !set {
+		return limits, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < time.Millisecond || duration > 5*time.Second {
+		return delegation.Limits{}, fmt.Errorf("AGENTGATE_BISCUIT_MAX_DURATION must be a Go duration between 1ms and 5s (inclusive)")
+	}
+	limits.MaxDuration = duration
+	return limits, nil
 }
 
 // loadAPIKeyCacheTTL returns the optional cache duration or its default.
