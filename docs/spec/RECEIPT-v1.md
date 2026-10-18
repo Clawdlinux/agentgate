@@ -634,7 +634,7 @@ Tests exercise both explicit and embedded trust.
 | `valid-partial` | `ok`, signed non-genesis anchor |
 | `valid-boundary` | `ok`, maximum sequence and string sizes, 32 delegation elements |
 | `valid-unpinned-prefix` | `ok`, deleted suffix cannot be detected without an endpoint |
-| `valid-unchecked-manifest-count` | `manifest_count_mismatch`, historical fixture now rejected |
+| `manifest-inflated-count` | `manifest_count_mismatch`, inflated signed count |
 | `valid-rotation-straddle` | `ok`, old and new receipt keys, new manifest signer |
 | `valid-rotation-before-first-receipt` | `ok`, new signer starts at snapshot head plus 1 |
 | `valid-historical-range` | `ok`, range starts before the manifest signer's window |

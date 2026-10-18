@@ -219,7 +219,7 @@ func generate(out string) {
 	badManifest = *full
 	badManifest.Count = 99
 	badManifest = receiptspec.SignManifest(badManifest, signerB.KID(), privB)
-	addCommon("valid-unchecked-manifest-count", receipts, &badManifest,
+	addCommon("manifest-inflated-count", receipts, &badManifest,
 		outcome{Class: "manifest_count_mismatch", FailedAtSeq: 3})
 
 	retired := receiptspec.SignManifest(*full, signerA.KID(), privA)

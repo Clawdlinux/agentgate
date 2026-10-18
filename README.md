@@ -105,13 +105,14 @@ tar xzf agentgate_<version>_<os>_<arch>.tar.gz
 # PASS: 1 receipts verified, head seq=1 hash=...
 ```
 
-No network call happens during verification itself — `trust.json` is a
-pinned local file, and `agentgate-verify` only reads the local SQLite file.
-Pass `--expected-head <seq>:<hash>` (from a checkpoint recorded separately,
-e.g. at handoff to an auditor) to also assert completeness, not just chain
-integrity. For scripts, add `--format json` to receive one machine-readable
-result object while keeping the same exit codes. Add `--quiet` (or `-q`) to
-text output to print only the `PASS:` summary on successful verification.
+Verification makes no network calls. `trust.json` is a pinned local file.
+For SQLite sources, `agentgate-verify` only reads the local database.
+A signed JSONL manifest proves completeness against its signed endpoint, not freshness.
+Its `range: full` label refers to the signed manifest head, not an independently verified database head.
+Pass `--expected-head <seq>:<hash>` from an independently recorded checkpoint to check completeness against that checkpoint.
+Without that independent pin, a signed historical endpoint can still pass verification.
+For scripts, add `--format json` for a machine-readable result with the same exit codes.
+Add `--quiet` (or `-q`) to print only the `PASS:` summary on successful text verification.
 
 ### Verify receipts from other producers
 

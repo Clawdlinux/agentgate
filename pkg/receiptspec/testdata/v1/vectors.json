@@ -277,8 +277,8 @@
       }
     },
     {
-      "name": "valid-unchecked-manifest-count",
-      "jsonl": "valid-unchecked-manifest-count.jsonl",
+      "name": "manifest-inflated-count",
+      "jsonl": "manifest-inflated-count.jsonl",
       "keys": "public-keys.json",
       "expected": {
         "class": "manifest_count_mismatch",
