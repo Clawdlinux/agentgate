@@ -47,6 +47,9 @@ overhead = response_completed - scheduled_arrival - upstream_ns
 
 Subtraction occurs per request, before nearest-rank percentiles.
 All requests must succeed. The ledger head must advance by exactly the measured count.
+Failed samples are excluded from latency percentiles.
+A failed request or receipt-count mismatch marks the summary invalid and emits `p99_ms: null`.
+Other percentiles, when available, describe successful samples only. Invalid rows still exit with failure.
 The client records request samples, connection reuse, and gateway timing headers.
 Those headers exist only in this loopback benchmark main, not the public gateway.
 `handler_ns` ends before response encoding. `receipt_ns` includes ledger queueing and committed acknowledgment.

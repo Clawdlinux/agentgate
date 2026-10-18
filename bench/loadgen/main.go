@@ -31,6 +31,34 @@ func percentile(values []int64, p float64) float64 {
 	return float64(values[max(0, int(math.Ceil(float64(len(values))*p))-1)]) / 1e6
 }
 
+func summarizeLatencies(samples []sample) map[string]any {
+	overhead, dispatch := make([]int64, 0, len(samples)), make([]int64, 0, len(samples))
+	failures := 0
+	for _, s := range samples {
+		if s.Error != "" {
+			failures++
+			continue
+		}
+		overhead = append(overhead, s.Total-s.Upstream)
+		dispatch = append(dispatch, s.Dispatch)
+	}
+	summary := map[string]any{
+		"errors": failures, "successful": len(overhead), "valid": failures == 0 && len(overhead) > 0,
+		"p50_ms": nil, "p90_ms": nil, "p99_ms": nil, "p999_ms": nil, "dispatch_p99_ms": nil,
+	}
+	if len(overhead) == 0 {
+		return summary
+	}
+	summary["p50_ms"] = percentile(slices.Clone(overhead), .50)
+	summary["p90_ms"] = percentile(slices.Clone(overhead), .90)
+	summary["p999_ms"] = percentile(slices.Clone(overhead), .999)
+	summary["dispatch_p99_ms"] = percentile(dispatch, .99)
+	if failures == 0 {
+		summary["p99_ms"] = percentile(overhead, .99)
+	}
+	return summary
+}
+
 func waitUntil(deadline time.Time) {
 	for {
 		left := time.Until(deadline)
@@ -177,19 +205,14 @@ func main() {
 	}
 	writer := csv.NewWriter(file)
 	writer.Write([]string{"total_ns", "upstream_ns", "dispatch_ns", "auth_ns", "receipt_ns", "handler_ns", "client_conn_ns", "reused", "error"})
-	overhead, dispatch := make([]int64, *count), make([]int64, *count)
-	errors, reused := 0, 0
-	for i, s := range samples {
+	reused := 0
+	for _, s := range samples {
 		writer.Write([]string{
 			strconv.FormatInt(s.Total, 10), strconv.FormatInt(s.Upstream, 10), strconv.FormatInt(s.Dispatch, 10),
 			strconv.FormatInt(s.Auth, 10), strconv.FormatInt(s.Receipt, 10), strconv.FormatInt(s.Handler, 10),
 			strconv.FormatInt(s.ClientConn, 10),
 			strconv.FormatBool(s.Reused), s.Error,
 		})
-		overhead[i], dispatch[i] = s.Total-s.Upstream, s.Dispatch
-		if s.Error != "" {
-			errors++
-		}
 		if s.Reused {
 			reused++
 		}
@@ -201,18 +224,22 @@ func main() {
 	if err := file.Close(); err != nil {
 		log.Fatal(err)
 	}
-	summary := map[string]any{
-		"rate": *rate, "c": *concurrency, "n": *count, "errors": errors, "receipts": after.Head - before.Head,
-		"throughput": float64(*count) / elapsed.Seconds(), "reuse_pct": 100 * float64(reused) / float64(*count),
-		"p50_ms": percentile(slices.Clone(overhead), .50), "p90_ms": percentile(slices.Clone(overhead), .90),
-		"p99_ms": percentile(slices.Clone(overhead), .99), "p999_ms": percentile(overhead, .999),
-		"dispatch_p99_ms":                 percentile(dispatch, .99),
+	summary := summarizeLatencies(samples)
+	for key, value := range map[string]any{
+		"rate": *rate, "c": *concurrency, "n": *count, "receipts": after.Head - before.Head,
+		"throughput":                      float64(summary["successful"].(int)) / elapsed.Seconds(),
+		"reuse_pct":                       100 * float64(reused) / float64(*count),
 		"gateway_alloc_bytes_per_request": float64(after.TotalAlloc-before.TotalAlloc) / float64(*count),
 		"gateway_gc_cycles":               after.NumGC - before.NumGC,
 		"gateway_gc_pause_total_ms":       float64(after.PauseTotalNS-before.PauseTotalNS) / 1e6,
+	} {
+		summary[key] = value
+	}
+	if after.Head-before.Head != uint64(*count) {
+		summary["valid"], summary["p99_ms"] = false, nil
 	}
 	json.NewEncoder(os.Stdout).Encode(summary)
-	if errors != 0 || after.Head-before.Head != uint64(*count) {
+	if !summary["valid"].(bool) {
 		os.Exit(1)
 	}
 }

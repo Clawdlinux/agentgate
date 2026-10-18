@@ -42,6 +42,10 @@ Both end after reading and closing the response body.
 Subtraction precedes sorting. Percentiles use nearest rank.
 The client caps connections at 128. This bounds connection bursts, not arrivals.
 Every scheduled request still runs. Its original timestamp never resets.
+Failed samples are excluded from latency percentiles.
+Any failed request marks the summary invalid and emits `p99_ms: null`.
+Other available percentiles describe successful requests only. They aren't a passing gate for an invalid row.
+Receipt-count mismatches also invalidate the row and suppress p99.
 
 The first full before and after matrices each completed 240,000 measured requests without errors.
 Every case's ledger head advanced by exactly 20,000.
@@ -183,6 +187,10 @@ Across all transactions, rather than only the tail requests:
 | Entire transaction | 0.4897 | 0.7171 |
 | Caller append wait | 12.0573 | 3.4212 |
 
+This is a noisy, single-run comparison, not evidence of an allocation-driven tail improvement.
+Caller append p99 fell while transaction p99 increased in the same table.
+Don't attribute that movement to `d15cf71`.
+
 After COMMIT p50 is 0.0628 ms, with maximum 4.186 ms.
 The automatic WAL checkpoint threshold remains 1,000 pages.
 The existing macOS `fullfsync` setting remains 0. SQLite synchronous mode remains FULL.
@@ -275,9 +283,8 @@ These aren't load-gate measurements.
 At 5,000/s with 0 ms upstream, a separate controlled before run allocated 25,977 B/request.
 The full after run allocated 19,704 B/request, about 24.2% less.
 That control's p99 was 19.950 ms, rather than the earlier matrix's 50.720 ms.
-The after p99 was 2.734 ms, then 8.194 ms on repetition.
-Host variability prevents a firm causal claim about the p99 change.
-The allocation benefit is verified independently.
+The 50.720 → 2.734 → 8.194 ms p99 movement is shared-host noise, not an effect of `d15cf71`.
+That commit saves about 6.2 KB of allocations per request, verified independently.
 
 For that controlled comparison, GC cycles fell from 201 to 184 per 20,000 requests.
 Total GC pause time fell from 11.391 ms to 8.984 ms.
@@ -302,6 +309,8 @@ See [PROC.md](PROC.md) for profile decoding and correlated tail analysis.
 
 ## Investigation commits and validation
 
+These IDs identify the measured pre-rebase commits.
+
 | Commit | Change |
 | --- | --- |
 | `8632eb0` | Separate-process harness and receipt trace regions |
@@ -311,6 +320,8 @@ See [PROC.md](PROC.md) for profile decoding and correlated tail analysis.
 | `9d39315` | Correlate connection and receipt tails, with analyzer regression tests |
 
 The production allocation fix is isolated in `d15cf71`.
+`8632eb0` also adds production trace instrumentation in `internal/receipt/ledger.go`.
+That instrumentation is a no-op when tracing is off.
 The harness commits don't change production transport, authorization, or durability settings.
 All commits are signed off and include the requested co-author trailer.
 Nothing was pushed.
