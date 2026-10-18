@@ -43,6 +43,11 @@ jobs:
             exit 1
           fi
 
+      - name: decision advisor tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s services/decision-advisor -v
+
       - name: go mod tidy drift check
         run: |
           go mod tidy

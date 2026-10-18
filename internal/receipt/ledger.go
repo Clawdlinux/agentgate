@@ -44,6 +44,9 @@ type Draft struct {
 	StatusCode      int
 	LatencyMS       int64
 	Error           string
+	// Record is stored atomically beside the receipt, not inside its wire format.
+	// Its canonical hash must equal ParamsSHA256.
+	Record json.RawMessage
 }
 
 // Ledger batches appends through a single writer (LEDG-06).
@@ -156,6 +159,16 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 	preflight.Seq, preflight.TimestampUnixNS, preflight.SignerKID = 1, 1, "preflight"
 	if err := receiptspec.Validate(preflight); err != nil {
 		return Receipt{}, appendError(err)
+	}
+	if len(draft.Record) > 0 {
+		canonical, err := receiptspec.CanonicalRecord(draft.Record)
+		if err != nil {
+			return Receipt{}, appendError(err)
+		}
+		if err := receiptspec.VerifyRecordBinding(preflight, canonical); err != nil {
+			return Receipt{}, appendError(err)
+		}
+		draft.Record = canonical
 	}
 	request := appendRequest{ctx: ctx, draft: draft, reply: make(chan appendResult, 1)}
 	l.start.Do(func() { go l.run() })
@@ -316,6 +329,12 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
 		}
+		if len(request.draft.Record) > 0 {
+			if _, err := conn.ExecContext(ctx, "INSERT INTO receipt_records (seq, record_json) VALUES (?, ?)",
+				r.Seq, []byte(request.draft.Record)); err != nil {
+				return nil, fmt.Errorf("insert evidence record: %w", err)
+			}
+		}
 		results[i].receipt = r
 		head, prevHash = r.Seq, r.EntryHash
 	}
@@ -328,6 +347,26 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 	}
 	committed = true
 	return results, nil
+}
+
+// Record returns the hash-bound evidence for a receipt. Missing records return sql.ErrNoRows.
+func (l *Ledger) Record(ctx context.Context, seq uint64) (json.RawMessage, error) {
+	var record []byte
+	var digest []byte
+	err := l.db.QueryRowContext(ctx, `SELECT e.record_json, r.params_sha256
+		FROM receipt_records e JOIN receipts r ON r.seq=e.seq WHERE e.seq=?`, seq).Scan(&record, &digest)
+	if err != nil {
+		return nil, err
+	}
+	if len(digest) != 32 {
+		return nil, errors.New("receipt: invalid evidence binding digest")
+	}
+	var r Receipt
+	copy(r.ParamsSHA256[:], digest)
+	if err := receiptspec.VerifyRecordBinding(r, record); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(record), nil
 }
 
 func (d Draft) receipt() Receipt {

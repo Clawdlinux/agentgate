@@ -22,6 +22,7 @@ services:
           repo: string
           state: "string?"
       create_issue:
+        risky: true
         method: POST
         path: /repos/{owner}/{repo}/issues
         params:
@@ -42,6 +43,7 @@ services:
       type: bearer
     actions:
       post_message:
+        risky: true
         method: POST
         path: /chat.postMessage
         params:
@@ -58,6 +60,7 @@ services:
         params:
           limit: "int?"
       add_reaction:
+        risky: true
         method: POST
         path: /reactions.add
         params:
@@ -82,6 +85,7 @@ services:
           limit: "int?"
           email: "string?"
       create_charge:
+        risky: true
         method: POST
         path: /charges
         params:

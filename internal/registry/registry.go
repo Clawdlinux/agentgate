@@ -57,6 +57,22 @@ type Action struct {
 	Params     map[string]string `yaml:"params"`               // param_name -> type (string, int, bool, string?, etc.)
 	Idempotent bool              `yaml:"idempotent,omitempty"` // opts PUT and DELETE into retries
 	Stream     bool              `yaml:"stream,omitempty"`     // permits negotiated SSE pass-through
+	Risky      bool              `yaml:"risky,omitempty"`      // requests an advisory check when enabled
+}
+
+func (a *Action) UnmarshalYAML(node *yaml.Node) error {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "risky" && node.Content[i+1].Tag != "!!bool" {
+			return errors.New("registry: risky must be a YAML boolean")
+		}
+	}
+	type plain Action
+	var value plain
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*a = Action(value)
+	return nil
 }
 
 // Config is the top-level YAML structure for the service catalog.

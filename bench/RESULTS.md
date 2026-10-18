@@ -371,6 +371,8 @@ Until then, no moderate-load production p99 pass is claimed.
 
 # Historical Phase 0: in-process act overhead
 
+For Phase 3 measurements, see [Advisor](#advisor).
+
 **Verdict: FAIL overall. The `<1 ms p99` exit gate is not met across the tested load levels.**
 
 Only the original concurrency-1 run with a 0 ms upstream passes.
@@ -735,3 +737,155 @@ Build, both vet commands, race tests, and tagged helper tests were rerun after t
 The existing closed-loop 64-request smoke matrix was rerun and passed.
 The full closed-loop table and CPU profile remain the original measurements, not new reruns.
 No `.cache/` files belong in the commit.
+
+## Advisor
+
+**Status: OFF by default. Model evaluation is pending.**
+
+Measured on 2026-10-18, on Apple M4 with 10 CPUs and 16 GiB.
+Python was 3.14.6. Go was 1.26.0 on darwin/arm64.
+Gateway benchmarks used `GOMAXPROCS=4`.
+The advisor service used Python's standard library with no runtime dependencies.
+
+### Dataset and method
+
+The 60 labeled cases are synthetic. No real receipt logs exist yet.
+There are 33 escalation labels and 27 non-escalation labels.
+Labels were authored for this implementation, not sampled from held-out production traffic.
+Known heuristic errors remain in the dataset.
+
+Each configuration runs 60 warmup requests, then 1,200 measured loopback HTTP requests.
+Classification counts use each label once during warmup.
+Percentiles use nearest-rank selection.
+HTTP latency includes client encoding, connection setup, service work, response transfer, and client reads.
+It excludes gateway authorization, upstream calls, and receipt commits.
+Tier latency measures backend execution only.
+
+Reproduction:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20
+```
+
+### Escalation results
+
+| Configuration | Precision | Recall | TP | FP | TN | FN |
+| --- | --- | --- | --- | --- | --- | --- |
+| Heuristic A | 90.91% | 90.91% | 30 | 3 | 24 | 3 |
+| Heuristic A+B test cascade | 90.91% | 90.91% | 30 | 3 | 24 | 3 |
+| Test B, selected subset only | 100% | 100% | 4 | 0 | 0 | 0 |
+
+Test B repeats the same heuristic on 4 low-confidence cases.
+Its classification denominator is only those 4 cases.
+It has no negative examples and measures no independent model quality.
+This is not a Lux, Vega, or GPU result.
+
+False positives: `edge-safe-25`, `edge-safe-26`, and `edge-safe-27`.
+They cover an owned reminder, an empty draft, and a preapproved small charge.
+False negatives: `edge-risk-31`, `edge-risk-32`, and `edge-risk-33`.
+They cover an outbound webhook, a workflow script, and an indirect read-only task claim.
+The heuristic misses semantic risk and overreacts to action-name keywords.
+Do not use these numbers as a production safety claim.
+
+### Latency
+
+| Configuration | Measured calls | HTTP p50 | HTTP p99 |
+| --- | --- | --- | --- |
+| Heuristic A | 1,200 | 0.209166 ms | 0.538958 ms |
+| Heuristic A+B test cascade | 1,200 | 0.207791 ms | 0.607667 ms |
+
+| Backend position | Measured calls | Backend p50 | Backend p99 |
+| --- | --- | --- | --- |
+| A alone | 1,200 | 0.005 ms | 0.020 ms |
+| A within cascade | 1,200 | 0.005 ms | 0.022 ms |
+| B within cascade | 80 | 0.003 ms | 0.036 ms |
+
+The B count is 4 cases repeated 20 times.
+One measured run per configuration is reported.
+There are no repeated-run confidence intervals.
+These are heuristic timings, not neural-model latency claims.
+
+### Disabled gateway before and after
+
+The existing disk-backed gateway benchmark was run at baseline `494e81be984c53d77c6b8181dbad7304a695f8a3`.
+The changed gateway used an unset advisor URL.
+Both runs used the same benchmark, concurrency 1, and a 0 ms upstream.
+Each run measured 5,000 requests after the benchmark's warmup.
+Runs alternated baseline, changed, baseline, changed, baseline, changed.
+
+```sh
+mkdir -p .cache/tmp .cache/go-tmp .cache/go-build .cache/baseline
+git archive 494e81b | tar -x -C .cache/baseline
+export TMPDIR="$PWD/.cache/tmp" GOTMPDIR="$PWD/.cache/go-tmp"
+export GOCACHE="$PWD/.cache/go-build" GOMAXPROCS=4
+go test -C .cache/baseline -tags=bench ./bench -run '^$' \
+  -bench '^BenchmarkHandleActE2E/delay=0s/c=1$' -benchtime=5000x -count=1
+go test -tags=bench ./bench -run '^$' \
+  -bench '^BenchmarkHandleActE2E/delay=0s/c=1$' -benchtime=5000x -count=1
+```
+
+| Run | Baseline p50 overhead | Changed p50 overhead | Baseline p99 overhead | Changed p99 overhead |
+| --- | --- | --- | --- | --- |
+| 1 | 423.8 us | 356.1 us | 6,208 us | 13,832 us |
+| 2 | 413.3 us | 452.6 us | 9,861 us | 11,146 us |
+| 3 | 449.8 us | 461.8 us | 15,466 us | 14,601 us |
+| Median | 423.8 us | 452.6 us | 9,861 us | 13,832 us |
+
+Median throughput was 479.9 requests/s before and 460.4 requests/s after.
+The shared host and SQLite filesystem showed large tail variation.
+Median p99 increased in this sample. These runs do not establish unchanged hot-path performance.
+They also do not isolate the advisor branch's cost.
+No latency exit gate is claimed.
+Disabled-path tests separately check unchanged receipt preimages and zero advisor calls.
+
+### Pending model runs
+
+Neither inspected Kai nor Laya revision listed an ONNX artifact.
+Local `onnxruntime` was absent.
+Kai's listed weights total 1,507,642,792 bytes, above the 1.5 GB limit.
+Laya's root safetensors file fits the limit but has no verified ONNX runtime contract.
+No weights were downloaded.
+
+The published vllm-sr 0.4.0 wheel did not establish a Decision 2.0 inference API.
+The `onnx` and `vllm-sr` adapters raise `NotImplementedError`, rather than invent calls.
+Kai versus Laya selection, Lux evaluation, and GPU cascade wiring remain pending.
+See [RUNTIME.md](../services/decision-advisor/RUNTIME.md) for artifact hashes and pinned model revisions.
+The advisor remains off regardless of these synthetic numbers.
+
+### Evidence and validation
+
+Full evidence is stored in `receipt_records`, atomically with its receipt.
+The receipt's existing `params_sha256` binds the canonical record through `VerifyRecordBinding`.
+The record retains the original params digest.
+Escalations use existing `deny` and valid `advisor_escalated` error codes.
+The frozen receipt specification and `pkg/receiptspec` are unchanged.
+See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unavailable-evidence limits.
+
+| Command or check | Result |
+| --- | --- |
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `CGO_ENABLED=1 go test -race ./...` | PASS |
+| `go test ./pkg/receiptspec -run '^TestV1VersionLock$' -count=1` | PASS, test unchanged |
+| `semgrep --config auto --error --quiet ./internal ./cmd ./pkg ./services` | PASS |
+| `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s services/decision-advisor -v` | PASS, 10 tests |
+| `PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20` | PASS, 60 labels and 2,400 measured requests |
+| Go client against the live Python service | PASS, deny escalation and evidence binding |
+| `git diff --exit-code -- pkg/receiptspec docs/spec/RECEIPT-v1.md` | PASS |
+| `helm lint --strict .cache/advisor-chart` | PASS, local wrapper around deployment fragments |
+| `helm lint --strict .cache/advisor-chart --set advisor.enabled=true --set advisor.tierB.enabled=true` | PASS |
+
+The default-off Helm render contained 0 Kubernetes resources.
+Docker image construction was not run. No container runtime result is claimed.
+
+Semgrep used its public auto profile without an application token.
+Its auto profile requires automatic registry metrics; disabling metrics prevents that profile from loading.
+No repository source was uploaded.
+
+SHA-256 identifiers:
+
+| File | SHA-256 |
+| --- | --- |
+| `bench/advisor/cases.jsonl` | `148e90a6219ded03b84ccaadd54a924c4b1169939d2a389b2ff463730b167d75` |
+| `services/decision-advisor/backends.py` | `d57b6a0ca2e9bb9450fce3261070cad3a86ee47c1429e4d0716cd696e18baec3` |
+| Unchanged `pkg/receiptspec/vectors_test.go` | `fbfcc8411ec707244c4fdd9e05922f5b31c12e9d92ff70e681198efcdfc846d5` |

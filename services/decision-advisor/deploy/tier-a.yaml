@@ -1,0 +1,91 @@
+{{- if .Values.advisor.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: decision-advisor
+spec:
+  selector:
+    matchLabels:
+      app: decision-advisor-tier-a
+  template:
+    metadata:
+      labels:
+        app: decision-advisor-tier-a
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: decision-advisor
+          image: {{ .Values.advisor.image | quote }}
+          ports:
+            - containerPort: 8081
+          env:
+            - name: ADVISOR_BACKEND
+              value: {{ .Values.advisor.backend | quote }}
+            - name: ADVISOR_CONFIDENCE_THRESHOLD
+              value: {{ .Values.advisor.confidenceThreshold | quote }}
+            - name: ADVISOR_TIER_A_MODEL_DIR
+              value: {{ .Values.advisor.tierA.modelDir | quote }}
+            - name: ADVISOR_TIER_A_REVISION
+              value: {{ .Values.advisor.tierA.revision | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+          resources:
+            requests:
+              cpu: {{ .Values.advisor.tierA.cpu | quote }}
+              memory: {{ .Values.advisor.tierA.memory | quote }}
+            limits:
+              cpu: {{ .Values.advisor.tierA.cpu | quote }}
+              memory: {{ .Values.advisor.tierA.memory | quote }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ .Values.advisor.tierA.modelPVC | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: decision-advisor
+spec:
+  # Require a local advisor on every node running gateway replicas.
+  internalTrafficPolicy: Local
+  selector:
+    app: decision-advisor-tier-a
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: decision-advisor-tier-a
+spec:
+  podSelector:
+    matchLabels:
+      app: decision-advisor-tier-a
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Adjust this selector to match your gateway pods in the same namespace.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: agentgate
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress: []
+{{- end }}

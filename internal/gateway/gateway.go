@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Clawdlinux/agentgate/internal/advisor"
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	"github.com/Clawdlinux/agentgate/internal/ratelimit"
 	"github.com/Clawdlinux/agentgate/internal/receipt"
@@ -81,15 +82,17 @@ type ReceiptRecorder interface {
 
 // Config holds the gateway dependencies.
 type Config struct {
-	Registry   *registry.Registry
-	Vault      vault.Store
-	HTTPClient *http.Client // optional embedded client; upstream deadlines use request contexts
-	Logger     *slog.Logger
-	Authorizer AgentAuthorizer              // required: verifies API keys and scopes
-	Receipts   ReceiptRecorder              // required: commits one receipt per attempt
-	Limiter    RequestLimiter               // optional: nil disables rate limiting
-	Delegation DelegationVerifier           // optional: nil rejects any request presenting a delegation token
-	Refreshers map[string]vault.RefreshFunc // optional: refreshes expiring OAuth tokens by service
+	Registry      *registry.Registry
+	Vault         vault.Store
+	HTTPClient    *http.Client // optional embedded client; upstream deadlines use request contexts
+	Logger        *slog.Logger
+	Authorizer    AgentAuthorizer              // required: verifies API keys and scopes
+	Receipts      ReceiptRecorder              // required: commits one receipt per attempt
+	Limiter       RequestLimiter               // optional: nil disables rate limiting
+	Delegation    DelegationVerifier           // optional: nil rejects any request presenting a delegation token
+	Refreshers    map[string]vault.RefreshFunc // optional: refreshes expiring OAuth tokens by service
+	Advisor       advisor.Advisor              // optional: nil disables every advisor call
+	AdvisorPolicy advisor.Policy
 }
 
 // Server is the gateway HTTP server.
@@ -111,6 +114,14 @@ func New(cfg Config) *Server {
 	}
 	if cfg.Receipts == nil {
 		panic("gateway: Config.Receipts must not be nil")
+	}
+	if cfg.Advisor != nil {
+		if cfg.AdvisorPolicy == (advisor.Policy{}) {
+			cfg.AdvisorPolicy = advisor.DefaultPolicy()
+		}
+		if err := cfg.AdvisorPolicy.Validate(); err != nil {
+			panic(err)
+		}
 	}
 	s := &Server{cfg: cfg, logger: cfg.Logger, upstreams: upstreamclient.New(upstreamclient.Options{Client: cfg.HTTPClient})}
 	mux := http.NewServeMux()
@@ -181,6 +192,7 @@ func (s *Server) handleDescribeService(w http.ResponseWriter, r *http.Request) {
 			"path":   a.Path,
 			"params": a.Params,
 			"stream": a.Stream,
+			"risky":  a.Risky,
 		}
 	}
 
@@ -207,6 +219,7 @@ type attempt struct {
 	keyPermit       *ratelimit.Permit
 	tenantPermit    *ratelimit.Permit
 	tenantID        string
+	advisorEvidence *advisor.Evidence
 }
 
 // immediateResponse is written with no receipt: the request never reached
@@ -258,6 +271,9 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 		defer stopCancel()
 	}
 	latencyMS := time.Since(start).Milliseconds()
+	if att.advisorEvidence != nil && att.advisorEvidence.Unavailable && out.errorCode == "" {
+		out.errorCode = "advisor_unavailable"
+	}
 
 	// A client cancellation must not abort the still-pending receipt
 	// commit — use a bounded context detached from the request's own
@@ -276,6 +292,15 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 		StatusCode:      out.status,
 		LatencyMS:       latencyMS,
 		Error:           out.errorCode,
+	}
+	if att.advisorEvidence != nil {
+		var err error
+		draft.Record, draft.ParamsSHA256, err = att.advisorEvidence.Bind(out.policyDecision, out.errorCode)
+		if err != nil {
+			s.logger.Error("advisor evidence binding failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "advisor evidence commit failed", Code: "receipt_failed"})
+			return
+		}
 	}
 
 	if _, err := s.cfg.Receipts.Append(receiptCtx, draft); err != nil {
@@ -444,6 +469,21 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		}
 	}
 
+	if action.Risky && s.cfg.Advisor != nil {
+		if s.cfg.Limiter != nil {
+			release, retry := s.cfg.Limiter.Acquire(att.tenantID)
+			if retry > 0 {
+				att.keyPermit.Cancel()
+				att.tenantPermit.Cancel()
+				return limitedOutcome("concurrency_limited", retry)
+			}
+			att.releaseSlot = release
+		}
+		if out := s.checkAdvisor(ctx, att); out != nil {
+			return out
+		}
+	}
+
 	tok, err := s.cfg.Vault.Get(att.req.OnBehalfOf, att.req.Service)
 	if err != nil {
 		return &outcome{
@@ -513,7 +553,7 @@ func (s *Server) executeAttempt(ctx context.Context, att *attempt) *outcome {
 		dispatch = s.upstreams.DoStream
 	}
 
-	if s.cfg.Limiter != nil {
+	if s.cfg.Limiter != nil && att.releaseSlot == nil {
 		release, retry := s.cfg.Limiter.Acquire(att.tenantID)
 		if retry > 0 {
 			att.keyPermit.Cancel()

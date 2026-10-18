@@ -26,6 +26,7 @@ services:
           owner: string
           repo: string
       create_issue:
+        risky: true
         method: POST
         path: /repos/{owner}/{repo}/issues
         params:
@@ -60,6 +61,7 @@ services:
           customer: "string?"
           limit: "int?"
       create_payment_intent:
+        risky: true
         method: POST
         path: /payment_intents
         params:
@@ -72,6 +74,7 @@ services:
       type: bearer
     actions:
       post_message:
+        risky: true
         method: POST
         path: /chat.postMessage
         params:

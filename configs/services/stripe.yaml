@@ -17,6 +17,7 @@ services:
           limit: "int?"
           email: "string?"
       create_charge:
+        risky: true
         method: POST
         path: /charges
         params:

@@ -5,6 +5,7 @@ services:
       type: bearer
     actions:
       post_message:
+        risky: true
         method: POST
         path: /chat.postMessage
         params:
@@ -21,6 +22,7 @@ services:
         params:
           limit: "int?"
       add_reaction:
+        risky: true
         method: POST
         path: /reactions.add
         params:

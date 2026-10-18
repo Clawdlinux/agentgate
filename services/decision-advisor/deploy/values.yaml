@@ -1,0 +1,27 @@
+# Merge these values into your gateway chart. Keep disabled until your evaluation passes.
+advisor:
+  enabled: false
+  image: registry.local/decision-advisor@sha256:REPLACE_WITH_MIRRORED_IMAGE_DIGEST
+  # Only heuristic works today. Model adapters fail startup until upstream APIs are verified.
+  backend: heuristic
+  unavailable: allow_with_flag
+  approvalThreshold: "0.6"
+  denyThreshold: "0.9"
+  confidenceThreshold: "0.8"
+  tierA:
+    # Run a separate zero-egress advisor pod on each gateway node.
+    cpu: "1"
+    memory: 512Mi
+    modelPVC: advisor-models
+    modelDir: /models/kai
+    revision: cc7f30cda9e7c7b28c5f71ef33f01e09385f1c4b
+  tierB:
+    enabled: false
+    # This scheduling example uses NVIDIA. Upstream validation currently covers AMD MI300X/MI325X.
+    gpuResource: nvidia.com/gpu
+    nodeSelector:
+      agentgate.io/advisor-tier: b
+    modelDir: /models/lux
+    revision: REPLACE_WITH_VERIFIED_40_CHARACTER_LUX_REVISION
+  tierC:
+    enabled: false
