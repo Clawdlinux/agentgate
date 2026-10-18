@@ -32,6 +32,13 @@ var ErrManifestSignatureInvalid = errors.New("receipt: export manifest signature
 // manifest's signed keyset_digest.
 var ErrKeysetDigestMismatch = errors.New("receipt: export manifest keyset digest mismatch")
 
+type manifestCheckError struct {
+	reason string
+	seq    uint64
+}
+
+func (e *manifestCheckError) Error() string { return e.reason }
+
 // ExportManifest is the first line of a signed bounded export. It binds the
 // requested and resolved range, the anchor before the export, the first and
 // last exported entry hashes, the producer's head at snapshot time, and a
@@ -110,7 +117,8 @@ func SignManifest(m ExportManifest, kid string, priv ed25519.PrivateKey) ExportM
 }
 
 // VerifyManifest checks m's signature against trustedKeys and that its
-// KeysetDigest matches embeddedKeys. Every failure here is a tamper finding:
+// KeysetDigest matches embeddedKeys. It also checks the snapshot signer window
+// and range metadata. Every failure here is a tamper finding:
 // the manifest is what carries trust for the export.
 func VerifyManifest(m ExportManifest, trustedKeys []TrustedKey, embeddedKeys []TrustedKey) error {
 	var key TrustedKey
@@ -133,6 +141,22 @@ func VerifyManifest(m ExportManifest, trustedKeys []TrustedKey, embeddedKeys []T
 	}
 	if ComputeKeysetDigest(embeddedKeys) != m.KeysetDigest {
 		return ErrKeysetDigestMismatch
+	}
+	// Rotation activates the new key at head+1, before its first receipt exists.
+	// The exported range can predate that key, so the anchor is not a lower bound.
+	// Subtraction avoids overflowing head+1 at the maximum wire sequence.
+	if (key.ValidFromSeq > m.HeadSeq && key.ValidFromSeq-m.HeadSeq > 1) ||
+		(key.ValidUntilSeq != nil && *key.ValidUntilSeq < m.HeadSeq) {
+		return &manifestCheckError{reason: ReasonManifestSignerInactiveAtHead, seq: m.HeadSeq}
+	}
+	if m.ResolvedTo > m.HeadSeq {
+		return &manifestCheckError{reason: ReasonManifestResolvedToBeyondHead, seq: m.ResolvedTo}
+	}
+	if m.Count < 0 || m.ResolvedTo < m.AnchorSeq || uint64(m.Count) != m.ResolvedTo-m.AnchorSeq {
+		return &manifestCheckError{reason: ReasonManifestCountMismatch, seq: m.ResolvedTo}
+	}
+	if m.ResolvedTo == m.HeadSeq && m.HeadHash != m.LastEntryHash {
+		return &manifestCheckError{reason: ReasonManifestHeadHashMismatch, seq: m.HeadSeq}
 	}
 	return nil
 }

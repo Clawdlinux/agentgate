@@ -6,11 +6,82 @@ Licensed under the Apache License, Version 2.0.
 package receipt
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
+
+func TestExportHandler_EmptyRangesVerifyOffline(t *testing.T) {
+	for _, count := range []int{0, 3} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ledger, store := newTestLedgerAndStore(t)
+			all := appendN(t, ledger, count)
+			w := httptest.NewRecorder()
+			ExportHandler(ledger.db, store)(w, httptest.NewRequest("GET",
+				fmt.Sprintf("/v1/receipts/export?from=%d", count+1), nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			bundle, err := receiptspec.ReadJSONL(strings.NewReader(w.Body.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := receiptspec.VerifyBundle(bundle, nil, nil)
+			if err != nil || !result.OK || !result.Complete || result.VerifiedCount != 0 || result.HeadSeq != uint64(count) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if count > 0 && result.HeadEntryHash != all[count-1].EntryHash {
+				t.Fatal("empty export did not preserve the anchor hash")
+			}
+		})
+	}
+}
+
+func TestExportHandler_RotationSnapshotsVerifyOffline(t *testing.T) {
+	ledger, store := newTestLedgerAndStore(t)
+	appendN(t, ledger, 2)
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 64; i++ {
+			w := httptest.NewRecorder()
+			ExportHandler(ledger.db, store)(w, httptest.NewRequest("GET", "/v1/receipts/export?from=1", nil))
+			if w.Code != http.StatusOK {
+				done <- fmt.Errorf("export status=%d body=%s", w.Code, w.Body.String())
+				return
+			}
+			bundle, err := receiptspec.ReadJSONL(strings.NewReader(w.Body.String()))
+			if err != nil {
+				done <- err
+				return
+			}
+			result, err := receiptspec.VerifyBundle(bundle, nil, nil)
+			if err != nil || !result.OK || !result.Complete {
+				done <- fmt.Errorf("result=%+v err=%v", result, err)
+				return
+			}
+		}
+		done <- nil
+	}()
+	for i := 0; i < 32; i++ {
+		_, priv, err := store.Rotate(uint64(i + 3))
+		clear(priv)
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		if _, err := ledger.Append(t.Context(), testDraft("github", "after-rotation")); err != nil {
+			t.Error(err)
+			break
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestExportHandler_FullRangeVerifiesOffline(t *testing.T) {
 	t.Parallel()

@@ -7,6 +7,7 @@ package receipt
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -79,79 +80,86 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 			return
 		}
 
-		ctx := r.Context()
-		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			writeExportError(w, http.StatusInternalServerError, "snapshot failed")
-			return
-		}
-		defer tx.Rollback()
-
-		headSeq, headHash, err := readHead(ctx, tx)
-		if err != nil {
-			writeExportError(w, http.StatusInternalServerError, "read head failed")
-			return
-		}
-
-		resolvedTo, errMsg, ok := resolveExportRange(from, requestedTo, hasTo, headSeq)
-		if !ok {
-			writeExportError(w, http.StatusBadRequest, errMsg)
-			return
-		}
-
-		anchorSeq := from - 1
-		var anchorHash [32]byte
-		if anchorSeq > 0 {
-			anchorHash, err = queryEntryHashAt(ctx, tx, anchorSeq)
+		var manifest ExportManifest
+		var receipts []Receipt
+		var keys []TrustedKey
+		status := http.StatusInternalServerError
+		snapshotStarted := false
+		// Acquire the signer lease before SQLite, matching the ledger's lock order.
+		// Release it before writing the response to avoid blocking rotation on network I/O.
+		err := signerStore.WithActiveKey(1, func(activeKey signer.KeyRecord, priv ed25519.PrivateKey) error {
+			snapshotStarted = true
+			ctx := r.Context()
+			tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 			if err != nil {
-				writeExportError(w, http.StatusInternalServerError, "read anchor failed")
-				return
+				return errors.New("snapshot failed")
 			}
-		}
+			defer tx.Rollback()
 
-		receipts, err := queryReceiptRange(ctx, tx, from, resolvedTo)
+			headSeq, headHash, err := readHead(ctx, tx)
+			if err != nil {
+				return errors.New("read head failed")
+			}
+
+			resolvedTo, errMsg, ok := resolveExportRange(from, requestedTo, hasTo, headSeq)
+			if !ok {
+				status = http.StatusBadRequest
+				return errors.New(errMsg)
+			}
+
+			anchorSeq := from - 1
+			var anchorHash [32]byte
+			if anchorSeq > 0 {
+				anchorHash, err = queryEntryHashAt(ctx, tx, anchorSeq)
+				if err != nil {
+					return errors.New("read anchor failed")
+				}
+			}
+
+			receipts, err = queryReceiptRange(ctx, tx, from, resolvedTo)
+			if err != nil {
+				return errors.New("read receipts failed")
+			}
+			keys, err = queryAllSignerKeys(ctx, tx)
+			if err != nil {
+				return errors.New("read keys failed")
+			}
+			if err := tx.Commit(); err != nil {
+				return errors.New("snapshot commit failed")
+			}
+
+			firstHash, lastHash := anchorHash, anchorHash
+			if len(receipts) > 0 {
+				firstHash = receipts[0].EntryHash
+				lastHash = receipts[len(receipts)-1].EntryHash
+			}
+
+			manifest = ExportManifest{
+				FormatVersion:  ExportFormatVersion,
+				RequestedFrom:  from,
+				RequestedTo:    requestedTo,
+				ResolvedTo:     resolvedTo,
+				Count:          len(receipts),
+				AnchorSeq:      anchorSeq,
+				AnchorHash:     anchorHash,
+				FirstEntryHash: firstHash,
+				LastEntryHash:  lastHash,
+				HeadSeq:        headSeq,
+				HeadHash:       headHash,
+				KeysetDigest:   ComputeKeysetDigest(keys),
+			}
+
+			manifest = SignManifest(manifest, activeKey.KID, priv)
+			return nil
+		})
 		if err != nil {
-			writeExportError(w, http.StatusInternalServerError, "read receipts failed")
+			message := "signing key unavailable"
+			if snapshotStarted {
+				message = err.Error()
+			}
+			writeExportError(w, status, message)
 			return
 		}
-		keys, err := queryAllSignerKeys(ctx, tx)
-		if err != nil {
-			writeExportError(w, http.StatusInternalServerError, "read keys failed")
-			return
-		}
-		if err := tx.Commit(); err != nil {
-			writeExportError(w, http.StatusInternalServerError, "snapshot commit failed")
-			return
-		}
-
-		firstHash, lastHash := anchorHash, anchorHash
-		if len(receipts) > 0 {
-			firstHash = receipts[0].EntryHash
-			lastHash = receipts[len(receipts)-1].EntryHash
-		}
-
-		manifest := ExportManifest{
-			FormatVersion:  ExportFormatVersion,
-			RequestedFrom:  from,
-			RequestedTo:    requestedTo,
-			ResolvedTo:     resolvedTo,
-			Count:          len(receipts),
-			AnchorSeq:      anchorSeq,
-			AnchorHash:     anchorHash,
-			FirstEntryHash: firstHash,
-			LastEntryHash:  lastHash,
-			HeadSeq:        headSeq,
-			HeadHash:       headHash,
-			KeysetDigest:   ComputeKeysetDigest(keys),
-		}
-
-		activeKey, priv, err := signerStore.LoadOrCreateActive(1)
-		if err != nil {
-			writeExportError(w, http.StatusInternalServerError, "signing key unavailable")
-			return
-		}
-		manifest = SignManifest(manifest, activeKey.KID, priv)
-		clear(priv)
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
