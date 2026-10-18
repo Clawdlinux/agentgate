@@ -3,6 +3,7 @@
 package bench
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -42,7 +43,28 @@ type stack struct {
 	upstream []chan time.Duration
 }
 
+type stackOptions struct {
+	timingSlots  int
+	spinUpstream bool
+}
+
+type benchmarkLogWriter struct {
+	b *testing.B
+}
+
+func (w benchmarkLogWriter) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte(`"level":"ERROR"`)) {
+		w.b.Logf("gateway error: %s", data)
+	}
+	return len(data), nil
+}
+
 func newStack(b *testing.B, concurrency int, delay time.Duration) *stack {
+	b.Helper()
+	return newStackWithOptions(b, concurrency, delay, stackOptions{})
+}
+
+func newStackWithOptions(b *testing.B, concurrency int, delay time.Duration, options stackOptions) *stack {
 	b.Helper()
 	database, err := agentgatedb.Open(filepath.Join(b.TempDir(), "agentgate.db"))
 	must(b, err)
@@ -77,7 +99,7 @@ func newStack(b *testing.B, concurrency int, delay time.Duration) *stack {
 	ledger := receipt.NewLedger(database, signers)
 	b.Cleanup(ledger.Close)
 
-	timings := make([]chan time.Duration, concurrency)
+	timings := make([]chan time.Duration, max(concurrency, options.timingSlots))
 	for i := range timings {
 		timings[i] = make(chan time.Duration, 1)
 	}
@@ -94,10 +116,16 @@ func newStack(b *testing.B, concurrency int, delay time.Duration) *stack {
 			http.Error(w, "invalid worker", http.StatusBadRequest)
 			return
 		}
-		// Each worker has 1 outstanding request. Buffered channels correlate upstream timings without shared locks.
+		// Closed-loop workers serialize requests. Open-loop requests each have their own slot.
 		defer func() { timings[params.Worker] <- time.Since(start) }()
 		if delay > 0 {
-			time.Sleep(delay)
+			if options.spinUpstream {
+				until := time.Now().Add(delay)
+				for time.Now().Before(until) {
+				}
+			} else {
+				time.Sleep(delay)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"ok":true}`)
@@ -125,7 +153,7 @@ func newStack(b *testing.B, concurrency int, delay time.Duration) *stack {
 	}))
 	handler := gateway.New(gateway.Config{
 		Registry: reg, Vault: cached, Authorizer: keys, Receipts: ledger, Limiter: limiter,
-		Logger: slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		Logger: slog.New(slog.NewJSONHandler(benchmarkLogWriter{b}, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	})
 	b.Cleanup(handler.CloseIdleConnections)
 	server := httptest.NewServer(handler)
@@ -141,11 +169,16 @@ func newStack(b *testing.B, concurrency int, delay time.Duration) *stack {
 }
 
 type sample struct {
-	total    time.Duration
-	upstream time.Duration
+	total       time.Duration
+	upstream    time.Duration
+	dispatchLag time.Duration
 }
 
 func (s *stack) act(ctx context.Context, worker int, body string) (sample, error) {
+	return s.actAt(ctx, worker, body, time.Time{})
+}
+
+func (s *stack) actAt(ctx context.Context, worker int, body string, scheduled time.Time) (sample, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, strings.NewReader(body))
 	if err != nil {
 		return sample{}, err
@@ -159,7 +192,8 @@ func (s *stack) act(ctx context.Context, worker int, body string) (sample, error
 	}
 	data, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	total := time.Since(start)
+	finished := time.Now()
+	total := finished.Sub(start)
 	if err != nil {
 		return sample{}, err
 	}
@@ -183,9 +217,18 @@ func (s *stack) act(ctx context.Context, worker int, body string) (sample, error
 		if duration > total {
 			return sample{}, fmt.Errorf("upstream time %s exceeds total %s", duration, total)
 		}
-		return sample{total: total, upstream: duration}, nil
+		return timedSample(scheduled, start, finished, duration), nil
 	case <-ctx.Done():
 		return sample{}, ctx.Err()
+	}
+}
+
+func timedSample(scheduled, started, finished time.Time, upstream time.Duration) sample {
+	if scheduled.IsZero() {
+		scheduled = started
+	}
+	return sample{
+		total: finished.Sub(scheduled), upstream: upstream, dispatchLag: started.Sub(scheduled),
 	}
 }
 
@@ -251,17 +294,25 @@ func benchmarkAct(b *testing.B, concurrency int, delay time.Duration) {
 	elapsed := time.Since(start)
 	b.StopTimer()
 	must(b, err)
+	s.checkReceipts(b, warmupRequests+b.N)
+	reportSamples(b, samples, elapsed)
+}
 
+func (s *stack) checkReceipts(b *testing.B, expected int) {
+	b.Helper()
 	var count, invalid int
 	must(b, s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(
 		CASE WHEN status_code != 200 OR policy_decision != 'allow' OR error_code != ''
 		OR length(signature) != 64 THEN 1 ELSE 0 END), 0) FROM receipts`).Scan(&count, &invalid))
 	head, _, err := s.ledger.Head(context.Background())
 	must(b, err)
-	if count != warmupRequests+b.N || head != uint64(count) || invalid != 0 {
-		b.Fatalf("receipt mismatch: count=%d head=%d invalid=%d expected=%d", count, head, invalid, warmupRequests+b.N)
+	if count != expected || head != uint64(count) || invalid != 0 {
+		b.Fatalf("receipt mismatch: count=%d head=%d invalid=%d expected=%d", count, head, invalid, expected)
 	}
+}
 
+func reportSamples(b *testing.B, samples []sample, elapsed time.Duration) {
+	b.Helper()
 	overheads := make([]time.Duration, b.N)
 	totals := make([]time.Duration, b.N)
 	var upstreamTotal time.Duration

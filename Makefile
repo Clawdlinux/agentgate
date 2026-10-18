@@ -1,4 +1,4 @@
-.PHONY: build build-verify run test docker lint clean bench-e2e
+.PHONY: build build-verify run test docker lint clean bench-e2e bench-e2e-open-loop
 
 build:
 	CGO_ENABLED=0 go build -o bin/agentgate ./cmd/agentgw
@@ -15,7 +15,9 @@ test:
 BENCHTIME ?= 20000x
 BENCH_FILTER ?= ^BenchmarkHandleActE2E$$
 
-bench-e2e:
+bench-e2e-open-loop: BENCH_FILTER = ^BenchmarkHandleActOpenLoop$$
+
+bench-e2e bench-e2e-open-loop:
 	mkdir -p .cache/tmp .cache/go-tmp .cache/go-build
 	TMPDIR="$(CURDIR)/.cache/tmp" GOTMPDIR="$(CURDIR)/.cache/go-tmp" \
 		GOCACHE="$(CURDIR)/.cache/go-build" GOMAXPROCS=4 \
