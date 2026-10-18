@@ -154,7 +154,7 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 	draft.DelegationChain = slices.Clone(draft.DelegationChain)
 	preflight := draft.receipt()
 	preflight.Seq, preflight.TimestampUnixNS, preflight.SignerKID = 1, 1, "preflight"
-	if _, err := receiptspec.CanonicalHashInput(preflight); err != nil {
+	if err := receiptspec.Validate(preflight); err != nil {
 		return Receipt{}, appendError(err)
 	}
 	request := appendRequest{ctx: ctx, draft: draft, reply: make(chan appendResult, 1)}
