@@ -48,7 +48,9 @@ def main():
         pause_start = None
         with open(args.trace) as file:
             for line in file:
-                region = re.search(r'G=(-?\d+) (RegionBegin|RegionEnd) Time=(\d+) Task=(\d+) Type="([^"]+)"', line)
+                if not line.startswith("M="):
+                    continue
+                region = re.search(r'G=(-?\d+) (RegionBegin|RegionEnd) Time=(\d+) Task=(\d+) Type="([^"]+)"', line) if "Region" in line else None
                 if region:
                     goroutine, event, timestamp, task, name = region.groups()
                     timestamp = int(timestamp)
@@ -68,14 +70,14 @@ def main():
                             appends[task] = (start, timestamp)
                         elif name.startswith("receipt.") and goroutine in active:
                             active[goroutine]["phases"][name] += timestamp - start
-                message = re.search(r'G=(-?\d+) Log Time=\d+ Task=(\d+) Category="([^"]+)" Message="([^"]*)"', line)
+                message = re.search(r'G=(-?\d+) Log Time=\d+ Task=(\d+) Category="([^"]+)" Message="([^"]*)"', line) if " Log " in line else None
                 if message:
                     goroutine, task, category, value = message.groups()
                     if category == "request.id" and value and int(value) >= 0:
                         tasks[int(value)] = task
                     if category == "receipt.reply" and goroutine in latest:
                         replies[task] = latest[goroutine]
-                pause = re.search(r'(RangeBegin|RangeEnd) Time=(\d+) Name="stop-the-world \(GC [^"]+"', line)
+                pause = re.search(r'(RangeBegin|RangeEnd) Time=(\d+) Name="stop-the-world \(GC [^"]+"', line) if "stop-the-world (GC" in line else None
                 if pause:
                     event, timestamp = pause.groups()
                     if event == "RangeBegin":

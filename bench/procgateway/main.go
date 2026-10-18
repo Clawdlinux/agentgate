@@ -93,13 +93,15 @@ func main() {
 	defer database.Close()
 	must(agentdb.RunMigrations(database))
 	var journal string
-	var synchronous, busyTimeout, foreignKeys int
+	var synchronous, busyTimeout, foreignKeys, autoCheckpoint, fullFSync int
 	must(database.QueryRow("PRAGMA journal_mode").Scan(&journal))
 	must(database.QueryRow("PRAGMA synchronous").Scan(&synchronous))
 	must(database.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout))
 	must(database.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys))
-	log.Printf("SQLite journal=%s synchronous=%d busy_timeout=%d foreign_keys=%d GOMAXPROCS=%d",
-		journal, synchronous, busyTimeout, foreignKeys, runtime.GOMAXPROCS(0))
+	must(database.QueryRow("PRAGMA wal_autocheckpoint").Scan(&autoCheckpoint))
+	must(database.QueryRow("PRAGMA fullfsync").Scan(&fullFSync))
+	log.Printf("SQLite journal=%s synchronous=%d busy_timeout=%d foreign_keys=%d wal_autocheckpoint=%d fullfsync=%d GOMAXPROCS=%d",
+		journal, synchronous, busyTimeout, foreignKeys, autoCheckpoint, fullFSync, runtime.GOMAXPROCS(0))
 
 	master := make([]byte, 32)
 	_, err = rand.Read(master)
@@ -161,15 +163,15 @@ func main() {
 		must(err)
 		defer cpu.Close()
 		must(pprof.StartCPUProfile(cpu))
-		defer pprof.StopCPUProfile()
 		runtime.SetMutexProfileFraction(1)
 		runtime.SetBlockProfileRate(1)
 		traceFile, err := os.Create(*profile + ".trace")
 		must(err)
 		defer traceFile.Close()
 		must(trace.Start(traceFile))
-		defer trace.Stop()
 		defer func() {
+			trace.Stop()
+			pprof.StopCPUProfile()
 			for _, name := range []string{"mutex", "block", "allocs", "heap"} {
 				file, err := os.Create(*profile + "." + name)
 				must(err)
@@ -186,7 +188,12 @@ func main() {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]uint64{"head": head})
+			var stats runtime.MemStats
+			runtime.ReadMemStats(&stats)
+			json.NewEncoder(w).Encode(map[string]uint64{
+				"head": head, "total_alloc": stats.TotalAlloc, "num_gc": uint64(stats.NumGC),
+				"pause_total_ns": stats.PauseTotalNs,
+			})
 			return
 		}
 		timing := &timings{}

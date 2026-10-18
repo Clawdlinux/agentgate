@@ -114,18 +114,24 @@ func main() {
 		}
 		return result
 	}
-	head := func() uint64 {
+	type snapshot struct {
+		Head         uint64
+		TotalAlloc   uint64 `json:"total_alloc"`
+		NumGC        uint64 `json:"num_gc"`
+		PauseTotalNS uint64 `json:"pause_total_ns"`
+	}
+	head := func() snapshot {
 		base := strings.TrimSuffix(*url, "/v1/act")
 		resp, err := client.Get(base + "/bench/head")
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer resp.Body.Close()
-		var body struct{ Head uint64 }
+		var body snapshot
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != 200 {
 			log.Fatal("cannot read ledger head")
 		}
-		return body.Head
+		return body
 	}
 	for range 256 {
 		if warmup := act(time.Time{}, -1); warmup.Error != "" {
@@ -191,14 +197,17 @@ func main() {
 		log.Fatal(err)
 	}
 	summary := map[string]any{
-		"rate": *rate, "c": *concurrency, "n": *count, "errors": errors, "receipts": after - before,
+		"rate": *rate, "c": *concurrency, "n": *count, "errors": errors, "receipts": after.Head - before.Head,
 		"throughput": float64(*count) / elapsed.Seconds(), "reuse_pct": 100 * float64(reused) / float64(*count),
 		"p50_ms": percentile(slices.Clone(overhead), .50), "p90_ms": percentile(slices.Clone(overhead), .90),
 		"p99_ms": percentile(slices.Clone(overhead), .99), "p999_ms": percentile(overhead, .999),
-		"dispatch_p99_ms": percentile(dispatch, .99),
+		"dispatch_p99_ms":                 percentile(dispatch, .99),
+		"gateway_alloc_bytes_per_request": float64(after.TotalAlloc-before.TotalAlloc) / float64(*count),
+		"gateway_gc_cycles":               after.NumGC - before.NumGC,
+		"gateway_gc_pause_total_ms":       float64(after.PauseTotalNS-before.PauseTotalNS) / 1e6,
 	}
 	json.NewEncoder(os.Stdout).Encode(summary)
-	if errors != 0 || after-before != uint64(*count) {
+	if errors != 0 || after.Head-before.Head != uint64(*count) {
 		os.Exit(1)
 	}
 }
