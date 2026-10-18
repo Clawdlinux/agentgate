@@ -10,21 +10,18 @@ Proposed
 
 ## Context
 
-The [gateway](../../internal/gateway/gateway.go) executes upstream work before appending its v1 receipt.
-It returns the response only after that append commits.
-The [ledger](../../internal/receipt/ledger.go) documents the resulting external-side-effect crash gap.
-An upstream action can succeed without a later committed receipt.
+The [gateway](../../internal/gateway/gateway.go) executes upstream work, commits its v1 receipt, then responds.
+The [ledger](../../internal/receipt/ledger.go) documents the crash gap: an action can succeed before its receipt commits.
 
 [SSE](../../internal/gateway/stream.go) starts only after a header-time receipt commits.
-Final stream digests currently reach logs, not signed receipts.
-The [stream-digest proposal](../spec/proposals/receipt-stream-digest.md) is unimplemented.
+Digests reach logs, not receipts. The [stream-digest proposal](../spec/proposals/receipt-stream-digest.md) is unimplemented.
 
 ## Decision Drivers
 
 - Record a durable obligation before dispatch.
 - Report uncertainty without replaying external side effects.
-- Preserve the receipt-before-response boundary, including SSE headers.
-- Measure the extra durable write rather than claiming free batching.
+- Preserve receipt-before-response, including SSE headers.
+- Measure added commit latency.
 
 ## Considered Options
 
@@ -36,27 +33,30 @@ The [stream-digest proposal](../spec/proposals/receipt-stream-digest.md) is unim
 
 ## Decision
 
-Propose v2 lifecycle records, not new meanings for v1 fields.
-After authentication, shape validation, and policy evaluation, allocate a gateway-generated attempt ID.
+Propose v2 lifecycle records without changing v1.
+After authentication, validation, and policy evaluation, allocate an attempt ID.
 Persist a signed `intent` before any upstream call, including credential refresh.
-The intent binds identity, delegation, params digest, policy, and destination action.
+Bind identity, delegation, params digest, policy, action, and any validated client request ID.
 Denied attempts get a terminal decision record without an upstream intent.
 
-An acknowledged intent permits 1 logical execution under the existing safe retry policy.
-An append timeout can still leave a committed record.
-Resolve that attempt's durable state before dispatch; ambiguity must not trigger an upstream retry.
-Provider retries and idempotency remain separate policies. Receipts do not guarantee exactly-once external execution.
+An acknowledged intent permits 1 logical execution under existing safe retries.
+Append timeout can still leave a committed record. Resolve ambiguity before dispatch, never by retrying upstream.
 
 Append a signed `outcome` after observing the upstream result.
 It references the intent's `chain_id`, sequence, entry hash, and attempt ID.
+Include `upstream_attempt_count`, counting actual action dispatches, including transport retries.
+Exclude credential refresh calls.
+Use `observation = not_dispatched` only when the running process knows no action dispatch occurred.
+That observation requires a known zero count, not an invented HTTP status.
+Crash recovery still writes `outcome_unknown`, with unknown attempt count unless durable evidence establishes it.
 For buffered responses, commit the outcome before returning status or body.
-Persist outcomes with a bounded context detached from client cancellation, matching the current gateway boundary.
+Use a bounded commit context detached from client cancellation, as today.
 
 For SSE, commit an `outcome` with `observation = headers_accepted` before forwarding headers.
 That outcome does not claim stream completion.
 Append a supplemental `stream_result` at termination.
-It binds the outcome hash, written-byte SHA-256, byte count, and termination reason.
-The digest covers bytes accepted by downstream writes, not proven client delivery.
+Bind outcome hash, written-byte SHA-256, byte count, and termination reason.
+The digest covers downstream writes, not proven client delivery.
 A missing terminal record means unknown completion, never success.
 Keep terminal artifacts out of forwarded SSE bytes.
 This proposed lifecycle replaces the earlier stream proposal's single-action-receipt rule for v2 only.
@@ -66,6 +66,15 @@ Append recovery outcomes marked `outcome_unknown`. Never call upstream during re
 For header outcomes without terminal stream records, append `stream_result` with unknown termination and no fabricated digest.
 Fenced recovery and unique references must prevent duplicate terminal records.
 Recovery records can reference an earlier epoch.
+Rotation does not drain inflight requests; their outcomes and stream results can enter the next epoch.
+
+### Client Retry Linkage
+
+Validate bounded `client_request_id` syntax; bind it to the principal and destination in the intent.
+Defer client retry deduplication and mapping an attempt ID to upstream `Idempotency-Key`.
+Providers differ in key support and retention. A new gateway attempt can repeat an external side effect.
+Claim no exactly-once behavior; add no unsupported provider header.
+The [owner defaults](README.md#open-decisions) disable automatic replay.
 
 ### Group-Commit Cost
 
@@ -86,21 +95,18 @@ SSE adds a later terminal record as well.
 
 The PR used Apple M4, `GOMAXPROCS=4`, and 20,000 requests per row.
 It did not meet the under-1-ms p99 gate.
-Those are end-to-end overheads, not isolated fsync measurements.
-Doubling them would not predict two-phase p99.
+These are end-to-end overheads, not fsync measurements. Doubling them cannot predict two-phase p99.
 Budget 1 extra serialized commit wait before dispatch, then benchmark it on Linux with dedicated 4-vCPU capacity.
 
 ## Consequences
 
 ### Positive
 
-Crashes leave inspectable obligations.
-Offline verification can distinguish observed results from unknown outcomes.
+Crashes leave inspectable obligations and explicit unknown outcomes.
 
 ### Negative
 
-Write volume and request latency increase.
-Recovery requires lifecycle indexes beyond a linear hash chain.
+Writes and latency increase. Recovery needs lifecycle indexes.
 
 ### Risks and Mitigations
 
@@ -113,6 +119,7 @@ SSE can fail after response headers. End the stream and persist uncertainty when
    Acceptance: reject missing, duplicate, or mismatched intent references.
 2. Add intent ordering instrumentation.
    Acceptance: the mock upstream sees no call before intent commit acknowledgment.
+   Acceptance: runtime cancellation before dispatch yields `not_dispatched` and zero attempts; retry counts include every action dispatch.
 3. Run subprocess `kill -9` tests before intent commit, after commit, during dispatch, and after provider success.
    Also kill between the upstream call and outcome commit, after outcome commit, and during SSE.
    Acceptance: recovery is idempotent, records unknown states, and never re-dispatches.
@@ -121,7 +128,7 @@ SSE can fail after response headers. End the stream and persist uncertainty when
 
 ## Related ADRs
 
-- [0001: Chains](0001-per-replica-chains.md) supplies stable references.
-- [0003: Shipping](0003-durable-shipping.md) retains recovery obligations.
-- [0006: Failure modes](0006-receipt-failure-modes.md) defines alternate durable recording.
-- [0007: Drain](0007-kubernetes-lifecycle.md) bounds unfinished streams.
+- [0001: References](0001-per-replica-chains.md).
+- [0003: Shipping](0003-durable-shipping.md).
+- [0006: Closed failure mode](0006-receipt-failure-modes.md).
+- [0007: Stream drain](0007-kubernetes-lifecycle.md).

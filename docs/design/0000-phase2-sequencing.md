@@ -36,22 +36,26 @@ Propose this dependency order:
 | --- | --- | --- | --- |
 | 1 | [0001](0001-per-replica-chains.md) | None | Agree v2 chain identity and unchanged v1 fixtures |
 | 2 | [0005](0005-root-certified-keys.md) | 0001 | Agree certificate scopes and epoch rotation fixtures |
-| 3a | [0002](0002-two-phase-receipts.md) | 0001, 0005 | Verify durable intent ordering and crash recovery |
+| 2a | [0002](0002-two-phase-receipts.md) | 0001 | Verify durable intent ordering and crash recovery with pinned raw keys |
 | 3b | [0003](0003-durable-shipping.md) | 0001, 0005 | Recover and verify sealed segments offline |
-| 4a | [0004](0004-merkle-checkpoints.md) | 0003, 0005 | Verify segment receipts against offline checkpoints |
-| 4b | [0006](0006-receipt-failure-modes.md) | 0002, 0003 | Prove bounded spool admission and exact replay |
-| 5 | [0007](0007-kubernetes-lifecycle.md) | 0001, 0002, 0003, 0005, 0006 | Pass restart, drain, volume fencing, and outage tests |
+| 4a | [0004](0004-merkle-checkpoints.md) | 0003, 0005 | Verify registry-backed head vectors; gate later Merkle proofs |
+| 3c | [0006](0006-receipt-failure-modes.md) | 0001, 0002 | Verify 503 responses and authenticated control receipts |
+| 5 | [0007](0007-kubernetes-lifecycle.md) | 0001, 0002, 0003, 0005 | Pass enrolment, drain, volume fencing, and outage tests |
 
 0004 is not a prerequisite for Kubernetes ledger availability.
-Kubernetes proof-publication tests require 0004 when that optional publisher is enabled.
-0007 follows 0005 transitively through its other prerequisites.
+Coverage-publication tests require 0004, independently of gateway readiness.
+0002 does not require 0005. Pinned raw keys are sufficient for its v2 lifecycle tests.
+0007 needs 0006's spool protocol only if the owner later enables the deferred spool.
+That deferred protocol also depends on 0003 for direct segment shipping.
+Multi-replica release remains blocked until authorization and vault provisioning are solved.
 
 ## Consequences
 
 ### Positive
 
-0002 and 0003 can be implemented independently after shared contracts settle.
-0004 and 0006 can then proceed independently.
+0002 and 0005 can proceed independently after the chain contract settles.
+0003 and the fail-closed portion of 0006 can then proceed independently.
+0004 publication does not block 0006.
 Tessera POSIX feasibility tests, benchmark reruns, and Kubernetes manifest drafts can start earlier.
 V1 golden-vector regression work is independent of every new protocol.
 
@@ -72,14 +76,9 @@ Additional commits could worsen latency. Re-run Phase 0 workloads before accepti
 3. Require each ADR's acceptance tests before enabling its feature.
 4. Run integrated crash tests and disconnected verification before declaring Phase 2 usable.
 
-### Owner Questions
+### Owner Decisions
 
-- Who approves v2 fields and the v1-to-v2 migration envelope?
-- What latency budget applies after the Phase 0 gate failed?
-- What certificate lifetime and offline renewal interval fit each installation?
-- What retention period, spool quota, and accepted unshipped-loss window apply?
-- How will replicas provision consistent authorization and vault data currently stored in SQLite?
-- Who operates the optional log publisher, and does any installation require witness quorum?
+The [open decisions](README.md#open-decisions) list recommended defaults and remaining approval gates.
 
 ## Related ADRs
 

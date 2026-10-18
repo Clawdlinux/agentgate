@@ -10,20 +10,18 @@ Proposed
 
 ## Context
 
-The [ledger](../../internal/receipt/ledger.go) reads a single committed head inside each `BEGIN IMMEDIATE` batch.
-Its primary key is currently [global `seq`](../../internal/db/migrations/002_receipts.sql) within 1 database.
-The [signer store](../../internal/signer/store.go) explicitly supports 1 gateway writer per database.
-Sharing a live database between replicas would violate that signing model.
+The [ledger](../../internal/receipt/ledger.go) reads 1 head per `BEGIN IMMEDIATE` batch.
+[Sequence](../../internal/db/migrations/002_receipts.sql) is global within its database.
+The [signer](../../internal/signer/store.go) supports only 1 gateway writer per database.
 
 [V1](../spec/RECEIPT-v1.md) authenticates neither a replica identifier nor an epoch.
-Adding unsigned JSON metadata cannot turn either into authenticated identity.
+Unsigned metadata cannot add authenticated identity.
 
 ## Decision Drivers
 
-- Scale replicas without cross-replica SQLite locking.
-- Make sequence reuse distinguishable after rotation or replacement.
-- Preserve all v1 bytes and verification semantics.
-- Support disconnected verification without a global sequencer.
+- Avoid cross-replica SQLite locks.
+- Distinguish rotation and replacement.
+- Preserve v1 bytes and offline verification.
 
 ## Considered Options
 
@@ -36,31 +34,59 @@ Adding unsigned JSON metadata cannot turn either into authenticated identity.
 ## Decision
 
 Propose a required authenticated v2 field: `chain_id = <replica-id>:<epoch>`.
-The [v2 outline](../spec/RECEIPT-v2.md) proposes its encoding boundaries.
+The [v2 outline](../spec/RECEIPT-v2.md) records encoding boundaries.
 `replica-id` is a provisioned UUID, not a reusable pod ordinal.
-`epoch` is a positive, monotonically increasing integer persisted with the replica identity.
-Each epoch starts at `seq = 1` with a zero previous hash.
+Persist a positive, monotonically increasing `epoch` with replica identity.
+The signed epoch-open control record is exactly `seq = 1`, with a zero previous hash.
 The uniqueness key becomes `(chain_id, seq)`.
 
-A healthy restart with intact storage resumes its existing epoch.
-Key rotation creates a new epoch.
-Lost storage requires a new replica UUID, even when Kubernetes reuses an ordinal.
-An exclusive volume fence must prevent concurrent writers and restored-volume clones from reusing a live identity.
-No proposal establishes a total execution order between replicas.
+Intact restarts resume their epoch. Rotation starts another.
+Lost storage requires a new UUID, even for reused ordinals.
+There is no total cross-replica execution order.
 
-Propose signed epoch-open and epoch-close control records.
-The opening record binds the preceding epoch's terminal hash and closing segment digest when available.
-A missing predecessor is explicit, not presented as continuity.
-Restoring an old backup requires fencing and a new replica UUID.
+### Fencing and Replica Authority
 
-Propose a version-aware verifier that accepts v1 and v2.
-Its v1 path retains the frozen preimages, signatures, and accepted semantics.
+Propose an external epoch lease, checked before admission and every writer batch.
+Use a Kubernetes Lease by default. Non-Kubernetes installations may use conditional object updates on an epoch-open lease.
+The authoritative registry allocates monotonically increasing fencing tokens through compare-and-swap.
+Lease acquisition requires the current workload identity, not merely a copied receipt certificate.
+Include the token in epoch-open, subsequent records, and segment descriptors.
+Lease loss or an uncertain renewal stops admission and further signing.
+Registry handoffs bind the recovered head and token cutover boundary after storage fencing.
+Publishers reject stale writes beyond that boundary, not legitimate historical receipts from the earlier token.
+Already-dispatched upstream calls cannot be recalled by a lease.
+
+The intermediate issuer refuses to certify the same `(replica UUID, epoch)` twice.
+That rule alone cannot stop a clone reusing an existing certificate and private key.
+The external lease and storage fencing are therefore required, not optional certificate features.
+Kubernetes Lease ownership alone does not physically fence a partitioned volume writer.
+Before takeover, establish storage fencing or refuse failover.
+
+Propose an authoritative replica registry backed by an append-only, signed issued-certificate log.
+Store it outside gateway PVCs, so replica loss cannot erase registration.
+The intermediate signs registrations, certificate digests, fencing generations, replacements, and loss declarations.
+Each entry binds organization, installation, replica UUID, epoch, and deployment slot.
+Inventories bind the registry revision and digest; offline bundles include its signed snapshot and required log entries.
+A registered chain with neither epoch-close nor inventory coverage is reported `lost`, even when no receipt survives.
+This reports missing evidence, not proof that the replica never executed work.
+Unclosed chains with partial coverage report the last authenticated head and an unknown suffix.
+Missing registry history prevents a complete installation-level coverage claim.
+Loss detection is relative to the supplied registry revision.
+Without independently trusted freshness, unseen registrations cannot be ruled out.
+
+Epoch-open references the predecessor's terminal hash and final segment digest when available.
+Epoch-close is the final record and fixes the epoch's terminal sequence.
+A missing predecessor is explicit. Restoring an old backup requires enrolment with a new UUID.
+
+Propose dual-version verification with frozen v1 preimages, signatures, and accepted semantics.
 V1 receipts are never re-encoded during migration or shipping.
-Keep their original JSONL bytes and existing verification vectors.
+Keep original JSONL bytes and vectors.
 Existing v1-only binaries will still reject v2.
 
 Migration closes the v1 ledger at a durable head.
-A separately signed migration descriptor binds that head, its original export digest, and the new v2 chain.
+A migration descriptor binds head, original exports, legacy keys, and new v2 chain.
+The organization root and final v1 signing key must co-sign the same descriptor preimage.
+Neither intermediate signatures nor embedded keys replace those approvals.
 That descriptor does not add fields to historical receipts.
 The legacy export retains its original trust requirements.
 
@@ -68,19 +94,19 @@ The legacy export retains its original trust requirements.
 
 ### Positive
 
-Each process retains a local group-commit writer.
-Epoch identity separates key lifetimes and recovery histories.
-Offline tooling can report missing epochs without querying a coordinator.
+Local group commit remains.
+Epochs separate signing histories.
+Offline tooling finds missing registered chains, not just surviving files.
 
 ### Negative
 
-Storage migrations must separate epoch metadata from the old global sequence model.
-Chain aggregation and inventory become explicit operational work.
+Storage must separate epoch heads.
+Leases and registry add local dependencies.
 
 ### Risks and Mitigations
 
-Replica cloning can create forks. Require exclusive ownership and reject duplicate `(chain_id, seq)` values with different hashes.
-An unpublished suffix can disappear. Compare signed inventories and checkpoints, not chain links alone.
+Replica cloning can create forks. Require external fencing and reject duplicate positions with different hashes.
+An unpublished chain can disappear. Compare the issued-certificate log with signed inventory coverage.
 Epoch resets could hide missing history. Require explicit predecessor references and report unverifiable gaps.
 
 ## Implementation Notes
@@ -90,14 +116,16 @@ Epoch resets could hide missing history. Require explicit predecessor references
    Acceptance: all existing v1 vectors retain their results.
 3. Introduce durable replica identity, epoch allocation, and separate chain heads.
    Acceptance: concurrent replicas can both emit sequence 1 without collision.
-4. Fence migration and rotation around writer admission.
-   Acceptance: restart resumes the same head; rotation starts exactly 1 new epoch.
-5. Exercise lost volumes, cloned backups, and interrupted migration.
-   Acceptance: no chain identity is silently reused, and original v1 exports remain byte-identical.
+4. Test concurrent lease acquisition, stale tokens, renewal loss, and copied certificates.
+   Acceptance: only the fenced owner admits work; duplicate certificate issuance is refused.
+5. Remove every segment of a registered chain.
+   Acceptance: offline coverage reports it lost, rather than silently omitting it.
+6. Interrupt migration and verify both co-signatures.
+   Acceptance: either missing signature fails; v1 bytes remain identical; epoch-open occupies sequence 1.
 
 ## Related ADRs
 
-- [0002: Lifecycle records](0002-two-phase-receipts.md) references intents by chain and hash.
-- [0003: Segments](0003-durable-shipping.md) preserves epoch boundaries.
-- [0005: Keys](0005-root-certified-keys.md) certifies epoch-scoped signing keys.
-- [0007: Kubernetes](0007-kubernetes-lifecycle.md) provides persistent identity and fencing.
+- [0002: Lifecycle references](0002-two-phase-receipts.md).
+- [0003: Segment boundaries](0003-durable-shipping.md).
+- [0005: Issuance](0005-root-certified-keys.md).
+- [0007: Identity and fencing](0007-kubernetes-lifecycle.md).
