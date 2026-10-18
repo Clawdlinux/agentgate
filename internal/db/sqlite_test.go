@@ -7,10 +7,43 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestOpenDurabilityPragmasOnEveryConnection(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "durable.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	// Hold both connections so the second check cannot reuse the first connection.
+	for range 2 {
+		connection, err := database.Conn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connection.Close()
+		var journal string
+		if err := connection.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journal); err != nil {
+			t.Fatal(err)
+		}
+		if journal != "wal" {
+			t.Fatalf("journal_mode=%q, want wal", journal)
+		}
+		for query, want := range map[string]int{"PRAGMA synchronous": 2, "PRAGMA busy_timeout": 5000, "PRAGMA foreign_keys": 1} {
+			var got int
+			if err := connection.QueryRowContext(t.Context(), query).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("%s=%d, want %d", query, got, want)
+			}
+		}
+	}
+}
 
 func TestRunMigrations_AppliesAllMigrationsCleanly(t *testing.T) {
 	t.Parallel()

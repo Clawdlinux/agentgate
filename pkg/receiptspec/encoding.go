@@ -21,7 +21,18 @@ func CanonicalHashInput(receipt Receipt) ([]byte, error) {
 		return nil, err
 	}
 
-	encoded := make([]byte, 0, 3110)
+	// Count fixed-width fields and length prefixes without reserving every field's maximum.
+	size := len(HashDomainV1) + 1 + 8 + 8 + 4 + 32 + 4 + 8 + 32
+	for _, field := range []string{
+		receipt.HumanPrincipal, receipt.AgentKeyID, receipt.Service, receipt.Action,
+		receipt.PolicyDecision, receipt.Error, receipt.SignerKID,
+	} {
+		size += 4 + len(field)
+	}
+	for _, element := range receipt.DelegationChain {
+		size += 4 + len(element)
+	}
+	encoded := make([]byte, 0, size)
 	encoded = append(encoded, HashDomainV1...)
 	encoded = append(encoded, 0)
 	encoded = binary.LittleEndian.AppendUint64(encoded, receipt.Seq)

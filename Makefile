@@ -1,4 +1,4 @@
-.PHONY: build build-verify run test docker lint clean bench-e2e bench-e2e-open-loop
+.PHONY: build build-verify run test docker lint clean bench-e2e bench-e2e-open-loop bench-proc
 
 build:
 	CGO_ENABLED=0 go build -o bin/agentgate ./cmd/agentgw
@@ -14,6 +14,13 @@ test:
 
 BENCHTIME ?= 20000x
 BENCH_FILTER ?= ^BenchmarkHandleActE2E$$
+BENCH_PROC_ARGS ?=
+
+bench-proc:
+	mkdir -p .cache/tmp .cache/go-tmp .cache/go-build .cache/proc/bin
+	TMPDIR="$(CURDIR)/.cache/tmp" GOTMPDIR="$(CURDIR)/.cache/go-tmp" \
+		GOCACHE="$(CURDIR)/.cache/go-build" go build -o .cache/proc/bin/ ./bench/procgateway ./bench/mockupstream ./bench/loadgen
+	python3 bench/proc.py $(BENCH_PROC_ARGS)
 
 bench-e2e-open-loop: BENCH_FILTER = ^BenchmarkHandleActOpenLoop$$
 

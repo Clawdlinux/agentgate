@@ -1,4 +1,375 @@
-# Phase 0: end-to-end act overhead
+# Separate-process gateway tail investigation
+
+**Current verdict: FAIL. Separate processes don't establish `<1 ms p99` at moderate fixed arrival rates.**
+
+The allocation fix reduces gateway bytes/request by about 24% in a 5,000 requests/s comparison.
+It doesn't resolve the tail gate.
+Only the 0 ms, closed-loop c1 case passes in the new full matrix.
+All fixed-rate cases fail in both after runs.
+Linux 4-vCPU validation remains pending.
+
+## New method and limits
+
+Measured on 2026-10-18, starting from `origin/main`, `19084f8`.
+The host remains Apple M4, 10 cores, 16 GiB, macOS `27.0.1`, Go `1.26.0`.
+See [PROC.md](PROC.md) for the complete setup and timing contract.
+
+`make bench-proc` builds 3 Go binaries and supervises separate processes:
+
+| Process | Implementation | GOMAXPROCS |
+| --- | --- | ---: |
+| Gateway | `bench/procgateway`, wiring the real gateway stack | 4 |
+| Upstream | `bench/mockupstream` | 2 |
+| Load generator | `bench/loadgen` | 2 |
+
+The gateway retains real authentication, scoped authorization, active rate limits, encrypted caches, and the signed SQLite ledger.
+No delegation token is presented. No production delegation check changed.
+SQLite startup reports WAL and `synchronous=2`, meaning FULL.
+Both checked database connections retain WAL, FULL, foreign keys, and the 5,000 ms busy timeout.
+The new durability regression test enforces those settings on 2 simultaneous connections.
+No receipt can acknowledge success before COMMIT returns.
+Batch size remains 256. Collection delay remains 0.
+The production upstream transport remains unchanged.
+Info logs still undergo JSON encoding, with sink writes discarded.
+
+Each case uses a fresh database, 256 warmup requests, and 20,000 measured requests.
+The mock supplies measured upstream handler nanoseconds inside its JSON response.
+This subtracts actual sleep overshoot, not a nominal 5 ms.
+Response encoding and network writes remain in overhead.
+Open-loop time starts at the original scheduled arrival, including late dispatch and connection-pool waits.
+Closed-loop time starts immediately before `Client.Do`.
+Both end after reading and closing the response body.
+Subtraction precedes sorting. Percentiles use nearest rank.
+The client caps connections at 128. This bounds connection bursts, not arrivals.
+Every scheduled request still runs. Its original timestamp never resets.
+Failed samples are excluded from latency percentiles.
+Any failed request marks the summary invalid and emits `p99_ms: null`.
+Other available percentiles describe successful requests only. They aren't a passing gate for an invalid row.
+Receipt-count mismatches also invalidate the row and suppress p99.
+
+The first full before and after matrices each completed 240,000 measured requests without errors.
+Every case's ledger head advanced by exactly 20,000.
+The repeated after fixed-rate matrix also completed all 160,000 requests.
+Initial 1,024-connection experiments encountered loopback connection resets.
+Those failed experiments aren't passing evidence and aren't included in the main comparison.
+
+`GOMAXPROCS=4` isn't CPU isolation, pinning, or a VM quota.
+Background CPU activity was observed during this shared-host investigation.
+Other test workloads were deferred when coordination allowed.
+Interactive host processes remained active.
+These runs have no isolated-host confidence interval.
+Don't treat a better single run as proof of a causal p99 improvement.
+The earlier shared-generator method was flawed, but its FAIL wasn't proved to be method-only.
+
+## Separate-process before and after
+
+All latency values are milliseconds. Throughput includes measured upstream time.
+Before uses the unoptimized production paths, with the new process harness.
+After includes `d15cf71`, the receipt allocation fix.
+The repeat reruns every fixed rate after that same production fix.
+
+| Upstream | Load | Before p99 | After p50 | After p99 | Repeat after p99 | After requests/s | After gate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 0 ms | 1,000/s | 5.785 | 0.250 | 1.952 | 4.535 | 1,000 | FAIL |
+| 0 ms | 2,500/s | 33.733 | 0.218 | 5.586 | 33.822 | 2,500 | FAIL |
+| 0 ms | 5,000/s | 50.720 | 0.193 | 2.734 | 8.194 | 5,000 | FAIL |
+| 0 ms | 10,000/s | 73.768 | 0.419 | 5.270 | 69.471 | 9,999 | FAIL |
+| 0 ms | Closed c1 | 0.690 | 0.165 | 0.438 | Not repeated | 5,274 | PASS, single run |
+| 0 ms | Closed c16 | 5.611 | 0.845 | 3.643 | Not repeated | 16,312 | FAIL |
+| 5 ms | 1,000/s | 21.760 | 0.267 | 2.304 | 6.233 | 1,000 | FAIL |
+| 5 ms | 2,500/s | 5.590 | 0.293 | 4.457 | 9.699 | 2,498 | FAIL |
+| 5 ms | 5,000/s | 45.674 | 22.866 | 1,702.730 | 59.228 | 3,777 | FAIL |
+| 5 ms | 10,000/s | 149.782 | 0.705 | 25.411 | 100.367 | 9,790 | FAIL |
+| 5 ms | Closed c1 | 4.802 | 0.506 | 2.302 | Not repeated | 147.6 | FAIL |
+| 5 ms | Closed c16 | 4.434 | 1.073 | 4.113 | Not repeated | 2,477 | FAIL |
+
+The 1.7-second after tail isn't discarded as an outlier.
+Its slowest 1% averages 1,715.248 ms overhead.
+Receipt append accounts for 58.481 ms, or 3.41%, of that conditional mean.
+Transport, request acceptance, client connection waits, and response completion account for 1,655.857 ms, or 96.54%.
+Dispatch accounts for 0.0067 ms. Authentication accounts for 0.0016 ms.
+Other gateway work accounts for 0.902 ms.
+That run predates explicit client-connection timing, so its residual can't be split retrospectively.
+The subsequent same-rate run still fails, with p99 59.228 ms.
+This variability prevents an honest claim that receipt allocation alone fixes the observed p99.
+
+Local evidence directories, all ignored:
+
+| Evidence | Directory under `.cache/proc/` |
+| --- | --- |
+| Full before matrix | `bounded-before-c9598240` |
+| Full after matrix | `after-9e36bcec` |
+| Repeated after fixed rates | `repeat-after-69b46760` |
+| Controlled 5,000/s allocation baseline | `controlled-before-f9aabf7a` |
+| Before 5,000/s profile | `prof-before-c5807e20` |
+| After profiles, 0 ms and 5 ms | `prof-after-0f54c36b` |
+| Foreground-policy control | `foreground-f8e7de70` |
+| Profiles with client-connection timing | `latest-prof-892308cc` |
+
+These private files aren't committed. Each directory contains CSV samples and JSON summaries.
+Profiles remain local, with the databases.
+
+### macOS foreground-policy control
+
+`taskpolicy -B -p PID` succeeded before each gateway warmup.
+This clears background policy. It doesn't pin CPUs or isolate the generator.
+All 4 cases completed without errors, with 20,000 committed receipts each.
+These additional unprofiled controls still miss the gate.
+They aren't evidence that foreground policy worsens latency. Host activity wasn't controlled.
+
+| Upstream | Offered requests/s | Overhead p99, ms | Dispatch p99, ms | Gate |
+| --- | ---: | ---: | ---: | --- |
+| 0 ms | 1,000 | 85.127 | 36.857 | FAIL |
+| 0 ms | 5,000 | 5.352 | 0.0408 | FAIL |
+| 5 ms | 1,000 | 10.809 | 0.0610 | FAIL |
+| 5 ms | 5,000 | 65.628 | 0.9912 | FAIL |
+
+The first control recorded 204.066 ms of aggregate gateway GC pauses.
+Its large dispatch lag also demonstrates scheduler pressure outside receipt COMMIT.
+No assumed platform penalty is subtracted from any gate.
+
+## Tail contributors
+
+Profiles are gateway-only. The generator and mock run in different processes.
+CPU, block, mutex, allocation, execution trace, and `GODEBUG=gctrace=1` evidence were collected.
+Request IDs correlate client samples with receipt transactions and committed replies.
+Profiled numbers aren't substituted into the gate table.
+
+### Correlated receipt-heavy tail
+
+The quieter after profile uses 5,000/s and 0 ms upstream.
+Its overhead p99 is 3.723 ms.
+The slowest 200 requests average 4.503 ms overhead.
+The following partition uses those same requests. It doesn't add unrelated percentile ranks.
+
+| Contributor | Conditional mean, ms | Share of that tail mean |
+| --- | ---: | ---: |
+| Load-generator dispatch | 0.023 | 0.51% |
+| Authentication, including key cache | 0.001 | 0.03% |
+| Receipt append, including all waits | 4.137 | 91.87% |
+| Other gateway work, minus upstream time | 0.119 | 2.65% |
+| Transport and response completion | 0.222 | 4.94% |
+
+Client-connection timing wasn't recorded in that profile's CSV.
+Its transport row therefore includes the client connection wait.
+Upstream `httptrace` was available: reuse was 99.975%, with connection wait p99 0.0093 ms.
+Its maximum upstream connection wait was 0.355 ms.
+That doesn't support a connection-pool change as the primary fix for this receipt-heavy tail.
+
+All 200 tail requests matched their committed receipt transactions.
+Within their receipt wait, these trace spans averaged:
+
+| Receipt contributor | Conditional mean, ms |
+| --- | ---: |
+| Queueing, preflight, and writer acquisition | 2.470 |
+| Head read | 0.0285 |
+| Signing the entire batch | 0.4065 |
+| Inserting the entire batch | 0.5500 |
+| SQLite COMMIT | 0.5774 |
+| Other transaction work | 0.0251 |
+| Reply scheduling after the transaction | 0.0790 |
+
+Queueing accounts for about 54.9% of the full tail mean.
+COMMIT accounts for about 12.8%.
+Batch signing and inserts account for about 9.0% and 12.2%.
+These are wall-clock spans. They include descheduling, not just crypto or SQLite CPU.
+Each caller waits for its entire batch, so batch work is deliberately attributed to every waiting caller.
+Trace timer boundaries differ slightly from the response-header timer.
+
+Across all transactions, rather than only the tail requests:
+
+| Trace region | Before p99, ms | After p99, ms |
+| --- | ---: | ---: |
+| Head read | 0.0473 | 0.0623 |
+| Receipt signing | 0.0509 | 0.0588 |
+| Receipt insert | 0.0922 | 0.1228 |
+| SQLite COMMIT | 0.2134 | 0.2897 |
+| Entire transaction | 0.4897 | 0.7171 |
+| Caller append wait | 12.0573 | 3.4212 |
+
+This is a noisy, single-run comparison, not evidence of an allocation-driven tail improvement.
+Caller append p99 fell while transaction p99 increased in the same table.
+Don't attribute that movement to `d15cf71`.
+
+After COMMIT p50 is 0.0628 ms, with maximum 4.186 ms.
+The automatic WAL checkpoint threshold remains 1,000 pages.
+The existing macOS `fullfsync` setting remains 0. SQLite synchronous mode remains FULL.
+COMMIT includes SQLite's WAL sync and any automatic checkpoint work.
+A separate kernel fsync-duration distribution wasn't obtained.
+macOS `fs_usage` refused unprivileged execution. No privileged trace was run.
+Don't describe these COMMIT wall times as isolated fsync syscall times.
+Linux syscall-level sync validation remains pending.
+
+### Locks, GC, JSON, logging, and connections
+
+The receipt-heavy after CPU profile spans 4.31s, with 4.69s of attributed CPU samples.
+System calls account for 59.91% of samples.
+`Ledger.commitBatch` accounts for 50.75% cumulatively.
+SQLite `_full_fsync` accounts for 6.40% cumulatively.
+These paths overlap. CPU shares aren't p99 wall-time shares.
+`slog.Info` accounts for 0.64% of CPU samples. Authentication accounts for 0.21%.
+JSON encoding wasn't a sampled CPU hotspot in this short run.
+JSON decoder buffers still account for 5.69% of sampled allocation bytes.
+
+The block profile attributes 6.26s of aggregate wait to `Ledger.Append`.
+It attributes 1.20s to upstream dispatch.
+Those are summed goroutine waits, not elapsed process time.
+Ledger submission and acknowledgment use channels, not a contended limiter lock.
+
+The mutex profile records 3.12 ms total observed delay over 20,256 requests.
+Limiter admission accounts for about 0.32 ms cumulatively. Slot release accounts for 0.34 ms.
+The upstream pool accounts for 0.25 ms.
+Vault-cache and key-cache locks aren't reported as contention hotspots.
+For scale, distributing every observed mutex delay over 200 tail requests averages 0.0156 ms each.
+This doesn't justify adding lock sharding here.
+
+The receipt-heavy trace contains 144 GC stop-the-world spans.
+Their p99 is 0.146 ms, with maximum 0.148 ms.
+Their mean overlap with a tail receipt append is 0.0101 ms.
+GC overlap is already inside the receipt spans. Don't add it again.
+That overlap is about 0.22% of the conditional tail mean.
+It doesn't explain this run's multi-millisecond queueing by itself.
+
+The profiled 5 ms case has upstream connection reuse of 99.131%.
+Upstream connection wait p99 is 0.1125 ms, with maximum 7.404 ms.
+Its slowest 1% averages 50.926 ms overhead.
+Receipt wait contributes 19.96%, dispatch 12.52%, other gateway work 21.38%, and transport completion 46.13%.
+Again, its older CSV can't split client connection waits from the last row.
+
+The later instrumented 5 ms profile explicitly records client connection acquisition.
+Its slowest 1% averages 61.788 ms overhead:
+
+| Contributor | Share |
+| --- | ---: |
+| Client connection acquisition and pool queue | 39.25% |
+| Receipt append | 22.52% |
+| Other gateway work | 18.84% |
+| Remaining transport and response completion | 15.64% |
+| Dispatch | 3.75% |
+| Authentication | 0.01% |
+
+Upstream reuse there is 98.233%, with connection-wait p99 0.431 ms.
+Client acquisition includes dialing and pool waiting. It isn't a gateway receipt cost.
+All of it remains in the conservative end-to-end gate.
+The later 0 ms profile also shows severe scheduler pressure.
+Its conditional tail assigns 75.64% to client connection acquisition and 5.44% to receipts.
+Its GC pause maximum reaches 47.858 ms. Its dispatch p99 reaches 72.119 ms.
+These changing shares are why a single syscall CPU profile couldn't establish the original root cause.
+The remaining tail includes host scheduling and transport queueing, alongside the serialized durable writer.
+No fixed share is claimed for uninstrumented JSON, logging, or kernel socket substeps.
+
+## Safe fix applied
+
+`d15cf71`, `perf(receipt): trim canonical buffer allocations`:
+
+- Validate preflight drafts through the same `receiptspec.Validate` contract, without encoding an unused preimage.
+- Reserve the exact validated preimage length instead of every field's maximum size.
+
+Canonical bytes, receipt hashes, and signatures remain unchanged.
+Signing and inserts still finish before synchronous COMMIT and acknowledgment.
+Authentication, rate limits, and delegation behavior remain unchanged.
+No GC setting, batch delay, transport limit, or SQLite durability setting changed.
+Golden vectors and chain verification tests pass.
+
+The microbenchmarks use a compiler overlay for the original encoding and ledger sources.
+They run the same benchmark code before and after, on this host's 10 default Go execution slots.
+These aren't load-gate measurements.
+
+| Microbenchmark | Before | After |
+| --- | ---: | ---: |
+| Preflight production path | 489.5 ns, 3,200 B, 1 allocation | 44.23 ns, 0 B, 0 allocations |
+| Canonical preimage encoding | 251.7 ns, 3,200 B, 1 allocation | 89.53 ns, 192 B, 1 allocation |
+
+At 5,000/s with 0 ms upstream, a separate controlled before run allocated 25,977 B/request.
+The full after run allocated 19,704 B/request, about 24.2% less.
+That control's p99 was 19.950 ms, rather than the earlier matrix's 50.720 ms.
+The 50.720 → 2.734 → 8.194 ms p99 movement is shared-host noise, not an effect of `d15cf71`.
+That commit saves about 6.2 KB of allocations per request, verified independently.
+
+For that controlled comparison, GC cycles fell from 201 to 184 per 20,000 requests.
+Total GC pause time fell from 11.391 ms to 8.984 ms.
+Those process counters don't isolate each tail request.
+They don't explain the second-scale transport residual.
+
+## Reproduction for this investigation
+
+```sh
+make bench-proc BENCH_PROC_ARGS='--label before'
+make bench-proc BENCH_PROC_ARGS='--label after'
+make bench-proc BENCH_PROC_ARGS='--label repeat-after --closed ""'
+make bench-proc BENCH_PROC_ARGS='--label profile --profile --rates 5000 --closed "" --delays 0,5ms'
+```
+
+The first command must run before applying `d15cf71`, or with its parent production sources overlaid.
+Keep the harness identical during a paired comparison.
+Use `.cache/` for overlays, Go scratch files, and profiles.
+Run `go test` allocation benchmarks with `-run '^$' -benchmem`.
+The benchmark names are `BenchmarkLedgerPreflight` and `BenchmarkCanonicalHashInput`.
+See [PROC.md](PROC.md) for profile decoding and correlated tail analysis.
+
+## Investigation commits and validation
+
+These IDs identify the measured pre-rebase commits.
+
+| Commit | Change |
+| --- | --- |
+| `8632eb0` | Separate-process harness and receipt trace regions |
+| `d770739` | Bound client connection bursts and retain failed-case evidence |
+| `36164ba` | Record gateway allocation and GC deltas |
+| `d15cf71` | Reduce receipt preimage allocations without changing signed bytes |
+| `9d39315` | Correlate connection and receipt tails, with analyzer regression tests |
+
+The production allocation fix is isolated in `d15cf71`.
+`8632eb0` also adds production trace instrumentation in `internal/receipt/ledger.go`.
+That instrumentation is a no-op when tracing is off.
+The harness commits don't change production transport, authorization, or durability settings.
+All commits are signed off and include the requested co-author trailer.
+Nothing was pushed.
+
+Final checks use `GOMAXPROCS=4`, with `TMPDIR`, `GOTMPDIR`, and `GOCACHE` inside `.cache/`.
+`SEMGREP_SEND_METRICS=on` allows automatic local rule selection.
+`SEMGREP_ENABLE_VERSION_CHECK=0` disables the unrelated version check.
+Semgrep ran locally. No remote code analysis was enabled.
+
+| Command | Result |
+| --- | --- |
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go vet -tags=bench ./bench` | PASS |
+| `go test -race ./...` | PASS, every normal package |
+| `go test -tags=bench ./bench ./bench/mockupstream -run Test -count=1` | PASS |
+| `python3 -m unittest discover -s bench -p 'test_*.py'` | PASS, 2 analyzer tests |
+| `semgrep --config auto --error --quiet ./internal ./cmd` | PASS, exit 0 |
+| `make bench-proc BENCH_PROC_ARGS='--label final-smoke --n 64'` | PASS, all 12 functional cases |
+| Full before, after, and repeated fixed-rate commands above | PASS functional checks; latency gates FAIL |
+| Foreground-policy control | PASS functional checks; all 4 latency gates FAIL |
+| Gateway-only CPU, block, mutex, allocation, and trace collection | PASS |
+
+The final smoke evidence is under `.cache/proc/final-smoke-0abec342`.
+Small smoke samples aren't latency-gate evidence.
+No cache, database, or profile file is committed.
+
+## Remaining work and tuning boundaries
+
+The current evidence doesn't justify limiter sharding or weaker receipt durability.
+Don't replace FULL with NORMAL or acknowledge an uncommitted receipt.
+Don't drop late arrivals or subtract assumed scheduler penalties.
+Keep the zero collection delay until a repeated paired experiment supports a different setting.
+
+`GOGC=200` is an optional deployment experiment when memory headroom allows.
+Pair it with a `GOMEMLIMIT` below the pod memory budget.
+Leave space for SQLite's native allocations, socket buffers, and the runtime.
+Neither setting is hardcoded or claimed as a measured fix here.
+GC pause reduction alone hasn't established the p99 gate.
+
+Dedicated Linux validation must isolate the gateway's 4 vCPUs from the generator and mock.
+Repeat each fixed rate and both upstream delays.
+Capture syscall-level sync timing there, alongside the same per-request receipt and connection spans.
+Until then, no moderate-load production p99 pass is claimed.
+
+---
+
+# Historical Phase 0: in-process act overhead
 
 **Verdict: FAIL overall. The `<1 ms p99` exit gate is not met across the tested load levels.**
 
