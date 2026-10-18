@@ -9,7 +9,7 @@ This file defines a swarm of GitHub Copilot agents that work together to build t
 
 **Repo:** `~/clawdlinux/agentgate`  
 **Runtime:** Go 1.22+, SQLite, Docker  
-**Architecture:** See `agentgate-architecture.md`
+**Architecture:** See [the superseded design](../../agentgate-architecture.md).
 
 ---
 
@@ -42,7 +42,7 @@ Create the complete project scaffold at ~/clawdlinux/agentgate:
 1. Initialize Go module:
    go mod init github.com/clawdlinux/agentgate
 
-2. Create directory structure exactly as specified in agentgate-architecture.md section 8.
+2. The historical directory structure appears in [architecture section 8](../../agentgate-architecture.md#8-directory-structure).
 
 3. Create go.mod with these dependencies:
    - github.com/go-chi/chi/v5 (router)
@@ -257,7 +257,7 @@ Implement API key auth, OAuth callback handling, and admin endpoints.
    - func GenerateKey() (plaintext string, keyID string, err error)
      - Format: `agk_<keyid>_<secret>`. Lowercase hex encodes 16 ID bytes and 32 secret bytes.
      - Store an indexed ID and HMAC-SHA256. Derive the pepper from the vault key with HKDF.
-     - Legacy `ag_live_` keys retain bcrypt validation. See [API keys](docs/api-keys.md).
+     - Legacy `ag_live_` keys retain bcrypt validation. See [API keys](../api-keys.md).
    - func (s *KeyStore) Create(ctx, name, services, users) (*AgentKey, plaintext, error)
    - func (s *KeyStore) Validate(ctx, plaintext) (*AgentKey, error)
    - func (s *KeyStore) Revoke(ctx, keyID) error

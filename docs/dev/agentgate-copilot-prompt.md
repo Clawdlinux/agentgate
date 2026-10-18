@@ -360,7 +360,7 @@ Create `internal/auth/`, `internal/oauth/`, `internal/admin/` packages.
 - `NewKeyStore(db, pepper, options...)` configures the database and verified-key LRU cache.
 - `Create(ctx, name, allowedServices, allowedUsers) (key *AgentKey, plaintext string, error)`
 - `Validate(ctx, plaintext string) (*AgentKey, error)` performs 1 indexed lookup and an HMAC comparison.
-- Legacy `ag_live_` keys retain bcrypt validation. See [API keys](docs/api-keys.md).
+- Legacy `ag_live_` keys retain bcrypt validation. See [API keys](../api-keys.md).
 - `Revoke(ctx, keyID string) error`
 
 `internal/auth/middleware.go`:

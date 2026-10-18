@@ -153,31 +153,52 @@ still there, from the bind-mounted `./data/agentgate.db`.
 
 ## Architecture
 
-```
-Agent → POST /v1/act → [Auth MW] → [Registry] → [Vault: get token] → [Proxy: call upstream] → Response
+```text
+Agent: POST /v1/act
+  |
+  v
+API key authentication (indexed HMAC lookup, verified-key cache)
+  |
+  v
+Body and params validation (1 MiB read cap, JCS digest)
+  |
+  v
+Key rate limit -> Service and principal scopes -> Tenant and service rate limits
+  |
+  v
+Delegation verification, if presented (token shape caps, bounded Datalog)
+  |
+  v
+Registry lookup -> Escaped path parameters and URL validation
+  |
+  v
+Vault (bounded token cache, singleflight OAuth refresh)
+  |
+  v
+Credential injection -> Tenant concurrency admission
+  |
+  v
+Upstream pool (circuit breaker, bounded retries, same-origin redirects)
+  |
+  v
+Bounded response body or SSE response headers
+  |
+  v
+Group-commit receipt ledger (signed SQLite transaction)
+  |
+  v
+JSON response or bounded SSE stream
 ```
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    AI AGENT                          │
-│  POST http://localhost:8080/v1/act                   │
-│  { service, action, on_behalf_of, params }           │
-└──────────────────────┬──────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                 AGENTGATE GATEWAY                    │
-│                                                      │
-│  Auth MW → Registry → Vault → Proxy → Upstream       │
-│  Rate Limiter │ Audit Logger │ OAuth Callbacks        │
-└──────────────────────┬──────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│               UPSTREAM SaaS APIs                     │
-│      GitHub  │  Slack  │  Google Workspace           │
-└─────────────────────────────────────────────────────┘
-```
+Authentication runs inside the gateway, not standalone middleware.
+Legacy keys retain a bcrypt fallback. See [API key storage](docs/api-keys.md).
+Every authenticated, schema-valid attempt reaches the receipt ledger, including policy denials.
+Invalid credentials and malformed bodies return before receipt creation.
+Receipt commit failures suppress the action response.
+SSE commits a header-time receipt before forwarding events. It does not certify stream completion.
+See [upstream limits](#upstream-connections-and-retries) for body caps, retry rules, and stream limits.
+
+Historical build instructions live in [docs/dev/](docs/dev/).
 
 ## API Reference
 
@@ -301,7 +322,7 @@ AgentGate is deterministic. Agents never see tokens, calls go only to configured
 2. **Tokens encrypted at rest.** AES-256-GCM with 32-byte key from environment.
 3. **No token exposure.** Agents never see OAuth tokens — only the gateway touches them.
 4. **Signed receipts.** Every authenticated action attempt commits one Ed25519-signed, hash-chained receipt before the response is returned — verify offline with `agentgate-verify`, no gateway state or private key needed.
-5. **Rate limiting.** Per-(agent, service) token bucket prevents runaway API usage.
+5. **Rate limiting.** Key admission precedes scopes. Tenant and optional service buckets follow scopes.
 6. **OAuth state encrypted** with AES-256-GCM and expires after 10 minutes.
 7. **OAuth refresh.** Configured OAuth providers refresh tokens expiring within 5 minutes before dispatch. A failed refresh returns `token_expired` without calling the SaaS API.
 
