@@ -199,6 +199,7 @@ SSE commits a header-time receipt before forwarding events. It does not certify 
 See [upstream limits](#upstream-connections-and-retries) for body caps, retry rules, and stream limits.
 
 Historical build instructions live in [docs/dev/](docs/dev/).
+Planning history lives in [docs/dev/planning/](docs/dev/planning/).
 
 ## API Reference
 
