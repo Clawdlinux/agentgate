@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/trace"
 	"slices"
 	"sync"
 	"time"
@@ -237,6 +238,9 @@ func (l *Ledger) flush(batch []appendRequest) {
 		return err
 	})
 	for i, request := range batch {
+		if trace.IsEnabled() {
+			trace.Log(request.ctx, "receipt.reply", "")
+		}
 		if err != nil {
 			request.reply <- appendResult{err: appendError(err)}
 		} else {
@@ -248,6 +252,11 @@ func (l *Ledger) flush(batch []appendRequest) {
 func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv ed25519.PrivateKey) ([]appendResult, error) {
 	// Caller cancellation must not interrupt a shared transaction.
 	ctx := context.Background()
+	region := trace.StartRegion(ctx, "receipt.transaction")
+	defer region.End()
+	if trace.IsEnabled() {
+		trace.Logf(ctx, "receipt.batch", "%d", len(batch))
+	}
 	conn, err := l.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire connection: %w", err)
@@ -267,7 +276,9 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		}
 	}()
 
+	headRegion := trace.StartRegion(ctx, "receipt.head")
 	head, prevHash, err := readHead(ctx, conn)
+	headRegion.End()
 	if err != nil {
 		return nil, fmt.Errorf("read head: %w", err)
 	}
@@ -293,18 +304,26 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		}
 		r := request.draft.receipt()
 		r.Seq, r.PrevHash, r.TimestampUnixNS = head+1, prevHash, uint64(l.nowFn().UnixNano())
+		signRegion := trace.StartRegion(ctx, "receipt.sign")
 		r, err = receiptspec.Seal(r, storeSigner{kid: key.KID, priv: priv})
+		signRegion.End()
 		if err != nil {
 			return nil, fmt.Errorf("sign receipt: %w", err)
 		}
-		if err := insertReceipt(ctx, conn, r); err != nil {
+		insertRegion := trace.StartRegion(ctx, "receipt.insert")
+		err = insertReceipt(ctx, conn, r)
+		insertRegion.End()
+		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
 		}
 		results[i].receipt = r
 		head, prevHash = r.Seq, r.EntryHash
 	}
 
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+	commitRegion := trace.StartRegion(ctx, "receipt.commit")
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	commitRegion.End()
+	if err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	committed = true
