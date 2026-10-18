@@ -1,0 +1,14 @@
+services:
+  mock:
+    base_url: http://127.0.0.1:9090
+    auth:
+      type: bearer
+    rate_limit:
+      requests_per_second: 1000000
+      burst: 1000000
+    actions:
+      echo:
+        method: POST
+        path: /echo
+        params:
+          worker: int

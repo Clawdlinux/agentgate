@@ -28,3 +28,6 @@ vendor/
 # Internal planning docs (not OSS-ready)
 /PRD-*.md
 dist/
+
+# Local benchmark data, profiles, and Go caches
+/.cache/
