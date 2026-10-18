@@ -25,7 +25,7 @@ class HeuristicBackend:
         if not isinstance(params, dict):
             raise ValueError("params must be an object")
         payload = json.dumps(params, sort_keys=True).lower()
-        risk, consistent, personal = 0.1, 0.95, 0.05
+        risk, consistent, personal = 0.1, 0.5, 0.05
         if any(word in action for word in ("delete", "drop", "cancel", "revoke")):
             risk = 0.75
         if any(word in action for word in ("payment", "charge", "transfer", "refund")):
@@ -43,11 +43,8 @@ class HeuristicBackend:
             personal = 0.75
         if any(key in payload for key in ('"password"', '"access_token"', '"private_key"')):
             personal, risk = 0.99, 0.99
-        task = str(state.get("task", params.get("stated_task", ""))).lower()
-        if task.startswith(("read ", "list ", "inspect ")) and not action.startswith(("list_", "get_", "read_", "inspect_")):
-            consistent = 0.05
-        # Short or missing task claims reduce confidence. They never become authority.
-        confidence = 0.95 if task else 0.7
+        # The gateway has no separate task signal. Payload fields cannot supply that authority.
+        confidence = 0.7
         return {
             "tier": tier,
             "model_id": "agentgate/heuristic-v1",

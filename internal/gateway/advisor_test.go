@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -86,11 +87,12 @@ func TestGatewayAdvisorEscalation(t *testing.T) {
 			if d.PolicyDecision != tc.decision {
 				t.Fatal(d.PolicyDecision)
 			}
-			if err := receiptspec.VerifyRecordBinding(receipt.Receipt{ParamsSHA256: d.ParamsSHA256}, d.Record); err != nil {
-				t.Fatal(err)
+			_, original, err := receipt.ParseAndDigestParams(json.RawMessage(`{"message":"hello"}`))
+			if err != nil || d.ParamsSHA256 != original {
+				t.Fatal("advisor changed the gateway params digest")
 			}
 			var e advisor.Evidence
-			if err := json.Unmarshal(d.Record, &e); err != nil {
+			if err := json.Unmarshal(d.AdvisorRecord, &e); err != nil {
 				t.Fatal(err)
 			}
 			if e.Outcome != tc.outcome || len(e.Attempts) != 1 || e.InputStateSHA256 == "" {
@@ -135,7 +137,7 @@ func TestGatewayAdvisorTimeoutModes(t *testing.T) {
 			}
 			d := r.last()
 			var e advisor.Evidence
-			if err := json.Unmarshal(d.Record, &e); err != nil {
+			if err := json.Unmarshal(d.AdvisorRecord, &e); err != nil {
 				t.Fatal(err)
 			}
 			if !e.Unavailable || d.Error != "advisor_unavailable" {
@@ -214,5 +216,42 @@ func TestGatewayAdvisorReceiptFailure(t *testing.T) {
 	r.failNext = true
 	if w := advisorRequest(s); w.Code != 500 || !strings.Contains(w.Body.String(), "receipt_failed") {
 		t.Fatal(w.Body.String())
+	}
+
+}
+
+func TestGatewayTruncatedParamsRequireApproval(t *testing.T) {
+	s, r, up := advisorSetup(t, true)
+	s.cfg.AdvisorPolicy = advisor.DefaultPolicy()
+	s.cfg.Advisor = advisorFunc(func(_ context.Context, state advisor.State, _ advisor.Questions) (advisor.Answers, error) {
+		var encoded bytes.Buffer
+		encoder := json.NewEncoder(&encoded)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(state); err != nil {
+			t.Fatal(err)
+		}
+		if encoded.Len() > 300000 {
+			t.Error("advisor params were not budgeted")
+		}
+		return advisorResponse(.1), nil
+	})
+	raw := `{"service":"github","action":"write","on_behalf_of":"user-1","params":{"message":"` + strings.Repeat("<", 400000) + `"}}`
+	req := httptest.NewRequest("POST", "/v1/act", strings.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if w.Code != 409 || up.Load() != 0 {
+		t.Fatalf("size bypass: status=%d upstream=%d", w.Code, up.Load())
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal(r.last().AdvisorRecord, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence["truncated"] != true || r.last().Error != "advisor_input_rejected" {
+		t.Fatal("missing truncation evidence")
+	}
+	_, digest, err := receipt.ParseAndDigestParams(json.RawMessage(`{"message":"` + strings.Repeat("<", 400000) + `"}`))
+	if err != nil || r.last().ParamsSHA256 != digest {
+		t.Fatal("truncation changed gateway params digest")
 	}
 }

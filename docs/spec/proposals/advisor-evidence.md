@@ -1,123 +1,137 @@
-# Advisor evidence without receipt v1 changes
+# Advisor companion receipts
 
-Status: implemented as a separate record. Receipt v1 stays frozen.
-Phase 3 items 1 through 6 cover the advisor and evaluation scaffold.
+Status: implemented without changing receipt v1 fields or gateway params hashing.
+This replaces the initial Phase 3 binding design.
 
-## Fixed wire constraints
+## Frozen meaning
 
-Receipt v1 accepts only `allow`, `deny`, and `rate_limited`.
-Its `error` field accepts lowercase ASCII codes, not a fixed vocabulary.
-We use the existing decision-record binding from [`DECISION.md`](../../../pkg/receiptspec/DECISION.md).
-No receipt fields, preimage bytes, or version-lock vectors change.
+Every gateway action receipt keeps `params_sha256 = DigestParams(params)`.
+Advisor checks, truncation, and unavailable handling never change that digest.
+The advisor is a separate decision producer under [`DECISION.md`](../../../pkg/receiptspec/DECISION.md).
+Only its companion receipt uses `HashRecord(record)`.
 
-| Advisor outcome | Receipt policy | Receipt error |
-| --- | --- | --- |
-| allow | Existing deterministic outcome | Existing error, usually empty |
-| require_approval | `deny` | `advisor_escalated` |
-| deny_by_advisor | `deny` | `advisor_escalated` |
-| unavailable, allow_with_flag | Existing deterministic outcome | `advisor_unavailable`, unless another error already exists |
-| unavailable, require_approval | `deny` | `advisor_unavailable` |
-| unavailable, deny | `deny` | `advisor_unavailable` |
+| Advisor outcome | Action policy | Companion policy | Error code |
+| --- | --- | --- | --- |
+| allow | Existing deterministic outcome | `allow` | Existing error, usually empty |
+| require_approval | `deny` | `deny` | `advisor_escalated` |
+| deny_by_advisor | `deny` | `deny` | `advisor_escalated` |
+| unavailable, allow_with_flag | Existing deterministic outcome | `allow` | `advisor_unavailable`, unless another error exists |
+| unavailable, require_approval | `deny` | `deny` | `advisor_unavailable` |
+| unavailable, deny | `deny` | `deny` | `advisor_unavailable` |
+| input rejected or truncated | `deny` | `deny` | `advisor_input_rejected` |
 
-The record always carries the unavailable flag, including when another error exists.
-`require_approval` returns HTTP 409. `deny_by_advisor` returns HTTP 403.
-This phase does not implement an approval queue or automatic replay.
-Approval never bypasses deterministic authorization on a later attempt.
+Input rejection requires approval even when the unavailable policy is `allow_with_flag`.
+A configured unavailable policy of `deny` stays stricter for rejected inputs.
+Valid high-risk answers can still deny truncated requests.
+Approval returns HTTP 409. Advisor denial returns HTTP 403.
+There is no approval queue or automatic replay.
 
-## Binding
+## Atomic pair
 
-Without an advisor call, `params_sha256` retains its original params digest.
-That includes disabled advisors, non-risky actions, and deterministic denials.
+The ledger performs these steps within one existing `commitBatch` transaction:
 
-For an advisor call:
+1. Seal and insert the action receipt, preserving its params digest.
+2. Add `action_receipt` to the canonical evidence record.
+3. Include that receipt's sequence, entry hash, and params digest in the link.
+4. Seal a companion with `Service="advisor"` and `Action="decision:advise"`.
+5. Set its `params_sha256` to `HashRecord(record)`.
+6. Set its `prev_hash` to the action receipt's entry hash.
+7. Insert the companion immediately after the action receipt.
+8. Insert the record into `receipt_records`, keyed by the companion sequence.
+9. Commit both receipts and the record before acknowledging the action.
 
-1. Compute the original gateway params digest without changing params canonicalization.
-2. Compute SHA-256 over the input state's Go JSON encoding.
-3. Build a versioned JSON evidence record.
-4. Store the original params digest inside `original_params_sha256`.
-5. Set receipt `params_sha256` to `receiptspec.HashRecord(record)`.
-6. Store both objects in the ledger's existing SQLite transaction.
-7. Commit before returning the action response.
+No other request can interleave receipts within this pair.
+The record uses a decimal string for the action sequence.
+This preserves the full receipt sequence range under decision-record numeric restrictions.
+The action and companion share the signing-key lease.
+An insertion failure rolls back the entire pair.
 
-The record contains:
-
-- `record_version: 1` and `record_type: agentgate_advisor`.
-- The original params digest and input state digest.
-- The exact fixed questions.
-- Approval, denial, and confidence thresholds.
-- The service's returned cascade threshold, when available.
-- The unavailable policy, flag, and bounded failure category.
-- Client-observed call latency in microseconds.
-- The advisor outcome and final receipt policy and error.
-- Ordered tier attempts, including model IDs and pinned revisions.
-- Per-tier weights SHA-256, probabilities, confidence, and latency.
-
-Fractions are decimal strings. Latencies are integers.
-This follows `CanonicalRecord`'s numeric restrictions.
-Input params remain unchanged when sent upstream.
-The record stores digests, not full request payloads.
-
-An unavailable call can have no returned tier attempts.
-We never fabricate model identity, weights, or probabilities after a timeout.
-Returned valid attempts survive a service error.
-Unreturned tier work cannot be reconstructed from the gateway.
-This limitation needs a durable service journal before model deployments claim complete per-tier timeout evidence.
-
-## Offline verification and export
-
-The existing receipt JSONL export remains byte-compatible.
-Fetch each companion record through admin-authenticated `GET /v1/receipts/{seq}/evidence`.
-Alternatively, retain `receipt_records.record_json` from the SQLite backup.
-The evidence endpoint checks binding and returns no record on failure.
-
-First verify the receipt signature and chain with a trusted keyset.
-Then call:
-
-```go
-err := receiptspec.VerifyRecordBinding(receipt, evidenceJSON)
-```
-
-To bind the original request too, compare its gateway params digest with `original_params_sha256`.
-The state digest covers `{"action":...,"params":...,"service":...}` using Go's JSON encoding.
-It does not authenticate any task claim inside the payload.
-
-Deleting a record does not invalidate the receipt's signature.
-It removes the evidence needed to explain that receipt's params digest.
-Receipt v1 cannot independently enforce companion-record completeness.
-Retain records with receipt exports and treat missing expected records as an audit failure.
-Database append failures still return `receipt_failed`, never an uncommitted action response.
-The existing SaaS-side-effect crash window remains unchanged.
-
-## Proposed v2 shape
-
-A future receipt version could preserve the direct params digest:
+Record link:
 
 ```json
 {
-  "format_version": 2,
-  "params_sha256": "<original params digest>",
-  "advisor_evidence_sha256": "<canonical evidence record digest>"
+  "action_receipt": {
+    "seq": "41",
+    "entry_hash": "<action receipt entry hash>",
+    "params_sha256": "<original gateway params digest>"
+  }
 }
 ```
 
-Its signed preimage must include the new digest and presence semantics.
-An all-zero digest could mean no advisor call.
-Verifiers must require the record whenever the signed digest is nonzero.
-This proposal needs new vectors and explicit version negotiation.
-It is not part of receipt v1.
+The record also retains model identities, pinned revisions, and weights SHA-256.
+It includes questions, probabilities, thresholds, latency, and unavailable handling.
+Fractions use decimal strings.
+Ordered tier attempts preserve returned cascade evidence.
+Unavailable calls can have no returned tier attempts.
+We never fabricate unknown model identities or probabilities.
+Unreturned tier work still needs a durable service journal before complete timeout evidence can be claimed.
 
-## Phase 3 implementation plan and review notes
+## Input budget and task signals
 
-- Item 1: add the Go interface, bounded HTTP client, and escalation policy.
-- Item 2: validate the registry's boolean `risky` marker.
-- Item 3: check risky requests before vault access and upstream dispatch.
-- Item 4: isolate Python inference behind the service API.
-- Item 5: evaluate 60 synthetic cases, not nonexistent receipt logs.
-- Item 6: keep default-off configuration and document runtime blockers.
+Advisor JSON encoding disables HTML escaping.
+Complete params have a 256 KiB budget.
+Larger params become a bounded UTF-8 JSON prefix inside `params._truncated_json`.
+The upstream action params and their receipt digest remain untouched.
+The record sets `truncated: true` and `input_rejected: true`.
+It binds both the transmitted state digest and original state digest.
+Truncation requires approval even if a safe answer returns.
 
-The shipped risky action changes are:
+Local serialization or size failures and service 4xx responses are `advisor_input_rejected`.
+Redirects and invalid success responses also require approval.
+Only timeouts, connection failures, and service 5xx responses qualify for `allow_with_flag`.
+The record distinguishes rejected input from unavailable inference.
 
-| Action | Reason |
+The state shape is exactly `{"service":...,"action":...,"params":...}`.
+There is no separate task header or trusted task signal in this phase.
+The heuristic ignores `params.stated_task` and top-level task claims.
+They cannot raise confidence or establish task consistency.
+Ordinary params are still forwarded upstream unchanged.
+The heuristic reports unknown task consistency and low confidence.
+
+## Export and verification
+
+Receipt JSONL lines, receipt preimages, and the manifest format stay unchanged.
+Exports add a typed record line immediately after each companion receipt:
+
+```json
+{"type":"record","seq":42,"record":{"outcome":"require_approval","action_receipt":{"seq":"41","entry_hash":"...","params_sha256":"..."}}}
+```
+
+The manifest counts receipts, not record lines.
+Exports without records keep their existing format.
+Updated readers accept both existing bundles and the additive record lines.
+Older readers reject the new line type. Update them before verifying advisor bundles.
+No evidence is hidden inside frozen receipt fields.
+
+The offline JSONL and SQLite verifier checks:
+
+1. Existing receipt signatures and chain linkage.
+2. `VerifyRecordBinding(companion, record)`.
+3. The record's action sequence, entry hash, and params digest against the preceding receipt.
+4. Companion adjacency and its coarse outcome mapping.
+
+Missing, duplicate, orphaned, or tampered records fail verification.
+An export range beginning with a companion returns HTTP 400.
+Start that range with its preceding action receipt.
+Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` remains available.
+
+Receipt v1 cannot enforce that every risky action has a companion.
+A range can end with an action receipt before its companion.
+The signed chain alone does not encode the registry marker or enabled advisor configuration.
+Completeness of advisor coverage needs external configuration and checkpoint evidence.
+The existing SaaS-side-effect crash window is unchanged.
+
+## Proposed v2 shape
+
+A future signed receipt could add `advisor_evidence_sha256` while retaining the original params digest.
+An all-zero digest would mean no advisor check.
+A nonzero digest would require a matching record.
+This needs new version negotiation and vectors.
+It is not implemented in v1.
+
+## Risky action review notes
+
+| Shipped action | Reason |
 | --- | --- |
 | GitHub `create_issue` | Writes repository state |
 | Slack `post_message` | Sends outbound content |
@@ -125,19 +139,15 @@ The shipped risky action changes are:
 | Stripe `create_charge` | Starts a payment |
 | Stripe `create_payment_intent` | Starts a payment flow |
 
-Markers appear in the shipped merged catalogs and corresponding connector catalogs.
-No delete, outbound-email, or bulk-export actions currently ship in those catalogs.
-Their evaluation cases are synthetic.
+The markers remain in merged and connector catalogs.
+No delete, outbound-email, or bulk-export action currently ships in those catalogs.
+Their harness cases are synthetic.
 
-## Runtime blockers
+## Remaining runtime blockers
 
-The heuristic backend runs. It is not a trained model.
-Both model adapters stop startup with `NotImplementedError`.
-Published vllm-sr 0.4.0 source does not establish a Decision 2.0 state/questions inference contract.
-We did not invent an API or add a custom weight loader.
-See the [runtime inspection](../../../services/decision-advisor/RUNTIME.md).
-
-No ONNX artifact was found at the inspected Kai or Laya revisions.
-Kai's listed weight files exceed the 1.5 GB download cap.
-Model evaluation and GPU cascade deployment remain pending.
-The advisor stays off despite the synthetic harness results.
+The heuristic runs. It is not a trained model.
+Both model adapters still fail startup with `NotImplementedError`.
+Published vllm-sr 0.4.0 source does not establish a verified Decision 2.0 inference contract.
+No custom weight loader or guessed API was added.
+See [RUNTIME.md](../../../services/decision-advisor/RUNTIME.md).
+The advisor remains off by default.

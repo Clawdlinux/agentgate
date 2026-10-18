@@ -110,7 +110,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	)
 	switch source {
 	case "sqlite":
-		bundle.Receipts, err = readSQLite(path)
+		bundle, err = readSQLiteBundle(path)
 	case "jsonl":
 		bundle, err = readJSONL(path)
 	}
@@ -213,31 +213,73 @@ func writeJSONResult(stdout io.Writer, result receiptspec.VerifyResult, rangeKin
 // readSQLite reads every row of the receipts table, ordered by seq, from a
 // local file. It never writes to the database.
 func readSQLite(path string) ([]receiptspec.Receipt, error) {
+	bundle, err := readSQLiteBundle(path)
+	return bundle.Receipts, err
+}
+
+func readSQLiteBundle(path string) (receiptspec.Bundle, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, err
+		return receiptspec.Bundle{}, err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`
+	tx, err := db.Begin()
+	if err != nil {
+		return receiptspec.Bundle{}, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`
 		SELECT seq, format_version, timestamp_unix_ns, human_principal, agent_key_id,
 		       delegation_chain_json, service, action, params_sha256, policy_decision,
 		       status_code, latency_ms, error_code, prev_hash, entry_hash, signer_kid, signature
 		FROM receipts ORDER BY seq ASC`)
 	if err != nil {
-		return nil, err
+		return receiptspec.Bundle{}, err
 	}
 	defer rows.Close()
 
-	var out []receiptspec.Receipt
+	var out receiptspec.Bundle
 	for rows.Next() {
 		r, err := receipt.ScanReceiptRow(rows)
 		if err != nil {
-			return nil, err
+			return receiptspec.Bundle{}, err
 		}
-		out = append(out, r)
+		out.Receipts = append(out.Receipts, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return receiptspec.Bundle{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return receiptspec.Bundle{}, err
+	}
+	var exists int
+	if err := tx.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='receipt_records'").Scan(&exists); err != nil {
+		return receiptspec.Bundle{}, err
+	}
+	if exists > 0 {
+		records, err := tx.Query("SELECT seq, record_json FROM receipt_records")
+		if err != nil {
+			return receiptspec.Bundle{}, err
+		}
+		defer records.Close()
+		out.Records = make(map[uint64]json.RawMessage)
+		for records.Next() {
+			var seq uint64
+			var record []byte
+			if err := records.Scan(&seq, &record); err != nil {
+				return receiptspec.Bundle{}, err
+			}
+			out.Records[seq] = json.RawMessage(record)
+		}
+		if err := records.Err(); err != nil {
+			return receiptspec.Bundle{}, err
+		}
+		if err := records.Close(); err != nil {
+			return receiptspec.Bundle{}, err
+		}
+	}
+	return out, tx.Commit()
 }
 
 // readJSONL reads path (or stdin when path is "-") with receiptspec.ReadJSONL.

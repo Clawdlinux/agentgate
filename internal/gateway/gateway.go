@@ -295,7 +295,7 @@ func (s *Server) handleAct(w http.ResponseWriter, r *http.Request) {
 	}
 	if att.advisorEvidence != nil {
 		var err error
-		draft.Record, draft.ParamsSHA256, err = att.advisorEvidence.Bind(out.policyDecision, out.errorCode)
+		draft.AdvisorRecord, err = att.advisorEvidence.Record(out.policyDecision, out.errorCode)
 		if err != nil {
 			s.logger.Error("advisor evidence binding failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "advisor evidence commit failed", Code: "receipt_failed"})

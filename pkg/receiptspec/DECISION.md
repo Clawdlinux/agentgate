@@ -66,6 +66,22 @@ Encode fractions as decimal strings (`"0.875"`) or integer micro-units
 (`875000`). Never as floats. Go `float64` fields that hold whole numbers pass;
 fractional ones fail, so do not rely on that.
 
+## Advisor producer and JSONL bundles
+
+The gateway's action receipt always hashes its original params.
+The separate advisor producer uses `Service="advisor"` and `Action="decision:advise"`.
+Its companion receipt follows the action receipt in the same transaction.
+The decision record includes `action_receipt`, with the preceding sequence, entry hash, and params digest.
+`VerifyAdvisorRecord` checks that link after `VerifyRecordBinding`.
+
+JSONL bundles can add `{"type":"record","seq":42,"record":{...}}` immediately after the corresponding receipt.
+Receipt and manifest encoding stays unchanged.
+`Bundle.Records` holds these separate objects.
+`VerifyBundle` rejects missing advisor records, altered bindings, and orphaned records.
+Existing bundles without records still parse.
+Older readers must be updated before reading the new record line type.
+V1 cannot prove that every risky gateway action has an advisor companion.
+
 Go structs, maps, and `json.RawMessage` that carry the same content hash the
 same. A test checks the output against the JCS library the gateway uses for
 params.

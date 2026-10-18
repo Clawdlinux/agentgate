@@ -44,6 +44,7 @@ type TierAnswer struct {
 type Answers struct {
 	Attempts         []TierAnswer `json:"attempts"`
 	CascadeThreshold float64      `json:"cascade_threshold"`
+	Truncated        bool         `json:"-"`
 }
 
 type Advisor interface {
@@ -125,25 +126,45 @@ func (p Policy) Evaluate(base string, a Answers, err error) string {
 		err = a.Validate()
 	}
 	if err != nil {
+		if p.Unavailable == "deny" {
+			return "deny_by_advisor"
+		}
+		if a.Validate() == nil {
+			if a.risk() >= p.DenyThreshold {
+				return "deny_by_advisor"
+			}
+			if a.risk() >= p.ApprovalThreshold {
+				return "require_approval"
+			}
+		}
+		if !IsUnavailable(err) || a.Truncated {
+			return "require_approval"
+		}
 		switch p.Unavailable {
 		case "require_approval":
 			return "require_approval"
-		case "deny":
-			return "deny_by_advisor"
 		default:
 			return "allow"
 		}
 	}
 	// Keep a high-risk observation from an earlier tier. Later tiers cannot erase it.
+	score := a.risk()
+	if score >= p.DenyThreshold {
+		return "deny_by_advisor"
+	}
+	if a.Truncated && p.Unavailable == "deny" {
+		return "deny_by_advisor"
+	}
+	if a.Truncated || score >= p.ApprovalThreshold || a.Attempts[len(a.Attempts)-1].Confidence < p.ConfidenceThreshold {
+		return "require_approval"
+	}
+	return "allow"
+}
+
+func (a Answers) risk() float64 {
 	score := 0.0
 	for _, t := range a.Attempts {
 		score = math.Max(score, math.Max(t.Probabilities["risk"], math.Max(1-t.Probabilities["task_consistent"], t.Probabilities["personal_data"])))
 	}
-	if score >= p.DenyThreshold {
-		return "deny_by_advisor"
-	}
-	if score >= p.ApprovalThreshold || a.Attempts[len(a.Attempts)-1].Confidence < p.ConfidenceThreshold {
-		return "require_approval"
-	}
-	return "allow"
+	return score
 }

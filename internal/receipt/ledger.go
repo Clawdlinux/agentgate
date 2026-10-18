@@ -47,6 +47,8 @@ type Draft struct {
 	// Record is stored atomically beside the receipt, not inside its wire format.
 	// Its canonical hash must equal ParamsSHA256.
 	Record json.RawMessage
+	// AdvisorRecord creates an immediately following advisor receipt in the same transaction.
+	AdvisorRecord json.RawMessage
 }
 
 // Ledger batches appends through a single writer (LEDG-06).
@@ -161,6 +163,9 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 		return Receipt{}, appendError(err)
 	}
 	if len(draft.Record) > 0 {
+		if len(draft.AdvisorRecord) > 0 {
+			return Receipt{}, appendError(errors.New("receipt: conflicting record modes"))
+		}
 		canonical, err := receiptspec.CanonicalRecord(draft.Record)
 		if err != nil {
 			return Receipt{}, appendError(err)
@@ -169,6 +174,16 @@ func (l *Ledger) Append(ctx context.Context, draft Draft) (Receipt, error) {
 			return Receipt{}, appendError(err)
 		}
 		draft.Record = canonical
+	}
+	if len(draft.AdvisorRecord) > 0 {
+		canonical, err := receiptspec.CanonicalRecord(draft.AdvisorRecord)
+		if err != nil {
+			return Receipt{}, appendError(err)
+		}
+		if _, err := receiptspec.AdvisorPolicy(canonical); err != nil {
+			return Receipt{}, appendError(err)
+		}
+		draft.AdvisorRecord = canonical
 	}
 	request := appendRequest{ctx: ctx, draft: draft, reply: make(chan appendResult, 1)}
 	l.start.Do(func() { go l.run() })
@@ -337,6 +352,36 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 		}
 		results[i].receipt = r
 		head, prevHash = r.Seq, r.EntryHash
+		if len(request.draft.AdvisorRecord) > 0 {
+			record, err := receiptspec.BindAdvisorRecord(r, request.draft.AdvisorRecord)
+			if err != nil {
+				return nil, err
+			}
+			digest, err := receiptspec.HashRecord(json.RawMessage(record))
+			if err != nil {
+				return nil, err
+			}
+			policy, err := receiptspec.AdvisorPolicy(record)
+			if err != nil {
+				return nil, err
+			}
+			companion := r
+			companion.Seq, companion.PrevHash = head+1, prevHash
+			companion.TimestampUnixNS = uint64(l.nowFn().UnixNano())
+			companion.Service, companion.Action = "advisor", "decision:advise"
+			companion.ParamsSHA256, companion.PolicyDecision = digest, policy
+			companion, err = receiptspec.Seal(companion, storeSigner{kid: key.KID, priv: priv})
+			if err != nil {
+				return nil, err
+			}
+			if err := insertReceipt(ctx, conn, companion); err != nil {
+				return nil, err
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO receipt_records (seq, record_json) VALUES (?, ?)", companion.Seq, record); err != nil {
+				return nil, err
+			}
+			head, prevHash = companion.Seq, companion.EntryHash
+		}
 	}
 
 	commitRegion := trace.StartRegion(ctx, "receipt.commit")
@@ -353,8 +398,9 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 func (l *Ledger) Record(ctx context.Context, seq uint64) (json.RawMessage, error) {
 	var record []byte
 	var digest []byte
-	err := l.db.QueryRowContext(ctx, `SELECT e.record_json, r.params_sha256
-		FROM receipt_records e JOIN receipts r ON r.seq=e.seq WHERE e.seq=?`, seq).Scan(&record, &digest)
+	var service, action string
+	err := l.db.QueryRowContext(ctx, `SELECT e.record_json, r.params_sha256, r.service, r.action
+		FROM receipt_records e JOIN receipts r ON r.seq=e.seq WHERE e.seq=?`, seq).Scan(&record, &digest, &service, &action)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +411,19 @@ func (l *Ledger) Record(ctx context.Context, seq uint64) (json.RawMessage, error
 	copy(r.ParamsSHA256[:], digest)
 	if err := receiptspec.VerifyRecordBinding(r, record); err != nil {
 		return nil, err
+	}
+	if service == "advisor" && action == "decision:advise" {
+		current, err := ScanReceiptRow(l.db.QueryRowContext(ctx, "SELECT "+receiptColumns+" FROM receipts WHERE seq=?", seq))
+		if err != nil {
+			return nil, err
+		}
+		previous, err := ScanReceiptRow(l.db.QueryRowContext(ctx, "SELECT "+receiptColumns+" FROM receipts WHERE seq=?", seq-1))
+		if err != nil {
+			return nil, err
+		}
+		if err := receiptspec.VerifyAdvisorRecord(previous, current, record); err != nil {
+			return nil, err
+		}
 	}
 	return json.RawMessage(record), nil
 }

@@ -39,7 +39,7 @@ Metrics contain counters only, never payloads.
   "state": {
     "service": "github",
     "action": "create_issue",
-    "params": {"stated_task": "Report the login bug", "title": "Login fails"}
+    "params": {"title": "Login fails"}
   },
   "questions": {
     "task_consistent": {"text": "Is this action consistent with the stated task?", "kind": "yes_no"},
@@ -55,11 +55,19 @@ For the heuristic, the revision is the source file's SHA-256.
 Its weights digest identifies the fixed no-weights ruleset marker.
 Those fields do not claim a trained model exists.
 
-The heuristic accepts a task claim in `state.task` or `params.stated_task`.
 The gateway supplies only service, action, and params.
-There is no authenticated task claim in the current action API.
-Missing task context yields low confidence and requires approval under default gateway thresholds.
-Payload task claims are untrusted.
+There is no separate task signal in this phase.
+The heuristic ignores both `params.stated_task` and top-level task claims.
+Neither can raise confidence or establish consistency.
+It reports unknown task consistency and low confidence.
+All heuristic requests require approval under default gateway thresholds.
+The synthetic harness uses this same state shape.
+
+Gateway advisor JSON disables HTML escaping.
+Params exceeding 256 KiB become a bounded UTF-8 prefix for the advisor only.
+The evidence records `truncated: true` and both original and transmitted state digests.
+Truncation and input rejection require approval even under `allow_with_flag`.
+The gateway's upstream params and action receipt params digest never change.
 
 ## Configuration
 
@@ -112,7 +120,9 @@ The advisor cannot grant scopes, retrieve credentials, or undo a deterministic d
 It can only leave an allow unchanged or escalate it.
 Earlier high-risk tier observations cannot be erased by later tiers.
 
-The default unavailable policy allows the deterministic request and records an unavailable flag.
+The default unavailable policy allows timeouts, connection failures, and service 5xx, with an unavailable flag.
+Service 4xx, invalid responses, and local input failures are `advisor_input_rejected`.
+They cannot use the allow fallback.
 Choose `require_approval` or `deny` if that fallback is inappropriate.
 A malicious advisor can cause denials or recommend unsafe allows.
 Deterministic policy still bounds every action.

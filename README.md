@@ -376,10 +376,20 @@ All tiers share a 150 ms end-to-end call deadline.
 
 Receipt v1 remains unchanged.
 Escalations use `deny` plus `advisor_escalated`.
-Full evidence is hash-bound through the existing decision-record mechanism and committed beside the receipt.
+Every action receipt keeps its original params digest.
+An immediately following `advisor` / `decision:advise` receipt binds the evidence record.
+Both receipts and the record commit in the same transaction.
 See the [binding proposal](docs/spec/proposals/advisor-evidence.md) for verification and unavailable behavior.
-Admin-authenticated `GET /v1/receipts/{seq}/evidence` returns a companion record.
-The normal receipt JSONL export stays unchanged.
+Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` returns the record.
+JSONL exports include typed record lines beside companion receipts.
+The offline verifier checks record binding and the link to the preceding action receipt.
+Existing exports without records remain compatible. Older readers need updating for the new record line type.
+Receipt v1 cannot prove that every risky action has a companion.
+
+Advisor params have a 256 KiB budget and use JSON without HTML expansion.
+Truncated or rejected input requires approval, regardless of `allow_with_flag`.
+The original params still go upstream unchanged after deterministic authorization and advisory approval.
+Only timeouts, connection failures, and service 5xx qualify for the unavailable allow fallback.
 
 The [service](services/decision-advisor/README.md) ships a deterministic heuristic for tests.
 Model adapters remain blocked until their upstream inference API is verified.

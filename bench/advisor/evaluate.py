@@ -44,6 +44,10 @@ def evaluate(cases, repeats, cascade):
     try:
         for repeat in range(repeats + 1):
             for case in cases:
+                if set(case["state"]) != {"service", "action", "params"}:
+                    raise ValueError("cases must use the gateway state shape")
+                if "stated_task" in case["state"]["params"]:
+                    raise ValueError("payload task claims are not an evaluation signal")
                 client = http.client.HTTPConnection(*server.server_address, timeout=0.150)
                 payload = json.dumps({"state": case["state"], "questions": QUESTIONS})
                 start = time.perf_counter_ns()

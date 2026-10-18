@@ -11,7 +11,7 @@ import (
 
 func TestEvidenceBindingAndAtomicCommit(t *testing.T) {
 	l := newTestLedger(t)
-	d := testDraft("github", "create_issue")
+	d := testDraft("operator", "decision:review")
 	d.Record = json.RawMessage(`{"outcome":"require_approval","probability":"0.875"}`)
 	var err error
 	d.ParamsSHA256, err = receiptspec.HashRecord(d.Record)
@@ -51,7 +51,7 @@ func TestEvidenceBindingAndAtomicCommit(t *testing.T) {
 
 func TestEvidenceEndpoint(t *testing.T) {
 	l := newTestLedger(t)
-	d := testDraft("github", "create_issue")
+	d := testDraft("operator", "decision:review")
 	d.Record = json.RawMessage(`{"outcome":"allow"}`)
 	d.ParamsSHA256, _ = receiptspec.HashRecord(d.Record)
 	if _, err := l.Append(t.Context(), d); err != nil {

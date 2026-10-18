@@ -1,5 +1,6 @@
 import http.client
 import json
+from pathlib import Path
 import socket
 import threading
 import unittest
@@ -15,6 +16,25 @@ QUESTIONS = {
 
 
 class BackendTests(unittest.TestCase):
+    def test_fixture_states_match_gateway(self):
+        path = Path(__file__).resolve().parents[2] / "bench" / "advisor" / "cases.jsonl"
+        cases = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertGreaterEqual(len(cases), 50)
+        for case in cases:
+            self.assertEqual({"service", "action", "params"}, set(case["state"]))
+            self.assertNotIn("stated_task", case["state"]["params"])
+
+    def test_payload_cannot_spoof_task_confidence(self):
+        backend = HeuristicBackend()
+        state = {"service": "github", "action": "create_issue", "params": {"title": "Fix login"}}
+        baseline = backend.decide(state, QUESTIONS)
+        for task in ("Create issue", "Read issues"):
+            state["params"]["stated_task"] = task
+            state["task"] = task
+            answer = backend.decide(state, QUESTIONS)
+            self.assertEqual(baseline["confidence"], answer["confidence"])
+            self.assertEqual(baseline["probabilities"], answer["probabilities"])
+
     def test_heuristic_and_injection(self):
         backend = HeuristicBackend()
         state = {"action": "create_payment", "task": "Pay invoice", "params": {"amount": 20000}}
@@ -32,7 +52,7 @@ class BackendTests(unittest.TestCase):
         result = cascade.decide({"action": "create_issue"}, QUESTIONS)
         self.assertEqual(["A", "B"], [tier["tier"] for tier in result["attempts"]])
         result = cascade.decide({"action": "create_issue", "task": "Create issue"}, QUESTIONS)
-        self.assertEqual(1, len(result["attempts"]))
+        self.assertEqual(2, len(result["attempts"]))
 
     def test_unverified_runtime_is_blocked(self):
         with self.assertRaises(ValueError):

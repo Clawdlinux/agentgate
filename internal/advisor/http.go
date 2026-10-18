@@ -50,50 +50,67 @@ func (h *HTTPAdvisor) CloseIdleConnections() { h.client.CloseIdleConnections() }
 func (h *HTTPAdvisor) Decide(ctx context.Context, state State, questions Questions) (Answers, error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
-	payload, err := json.Marshal(struct {
+	state, truncated, err := PrepareState(state)
+	if err != nil {
+		return Answers{}, err
+	}
+	payload, err := MarshalJSON(struct {
 		State     State     `json:"state"`
 		Questions Questions `json:"questions"`
 	}{state, questions})
 	if err != nil {
-		return Answers{}, err
+		return Answers{Truncated: truncated}, errors.Join(ErrInputRejected, err)
 	}
 	if len(payload) > MaxInputBytes {
-		return Answers{}, errors.New("advisor: input too large")
+		return Answers{Truncated: truncated}, rejected("advisor: input too large")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return Answers{}, err
+		return Answers{Truncated: truncated}, errors.Join(ErrInputRejected, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return Answers{}, err
+		return Answers{Truncated: truncated}, errors.Join(ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
+	eligibleUnavailable := resp.StatusCode >= 500 && resp.StatusCode < 600
+	if resp.StatusCode >= 300 && resp.StatusCode < 500 {
+		return Answers{Truncated: truncated}, rejected(fmt.Sprintf("advisor: HTTP status %d", resp.StatusCode))
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
 	if err != nil {
-		return Answers{}, err
+		return Answers{Truncated: truncated}, errors.Join(ErrUnavailable, err)
+	}
+	if eligibleUnavailable {
+		var partial Answers
+		if len(body) <= MaxResponseBytes && json.Unmarshal(body, &partial) == nil && partial.Validate() == nil {
+			partial.Truncated = truncated
+			return partial, errors.Join(ErrUnavailable, fmt.Errorf("advisor: HTTP status %d", resp.StatusCode))
+		}
+		return Answers{Truncated: truncated}, errors.Join(ErrUnavailable, fmt.Errorf("advisor: HTTP status %d", resp.StatusCode))
 	}
 	if len(body) > MaxResponseBytes {
-		return Answers{}, errors.New("advisor: response too large")
+		return Answers{Truncated: truncated}, rejected("advisor: response too large")
 	}
 	var result Answers
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&result); err != nil {
-		return Answers{}, errors.New("advisor: invalid response")
+		return Answers{Truncated: truncated}, rejected("advisor: invalid response")
 	}
 	if err := dec.Decode(new(any)); err != io.EOF {
-		return Answers{}, errors.New("advisor: trailing response data")
+		return Answers{Truncated: truncated}, rejected("advisor: trailing response data")
 	}
 	if err := result.Validate(); err != nil {
-		return Answers{}, err
+		return Answers{Truncated: truncated}, errors.Join(ErrInputRejected, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return result, fmt.Errorf("advisor: HTTP status %d", resp.StatusCode)
+		return Answers{Truncated: truncated}, rejected(fmt.Sprintf("advisor: HTTP status %d", resp.StatusCode))
 	}
+	result.Truncated = truncated
 	if err := ctx.Err(); err != nil {
-		return result, err
+		return result, errors.Join(ErrUnavailable, err)
 	}
 	return result, nil
 }

@@ -11,20 +11,23 @@ import (
 
 // Evidence uses decimal strings because decision records reject fractional JSON numbers.
 type Evidence struct {
-	RecordVersion     int               `json:"record_version"`
-	RecordType        string            `json:"record_type"`
-	ParamsSHA256      string            `json:"original_params_sha256"`
-	InputStateSHA256  string            `json:"input_state_sha256"`
-	Questions         Questions         `json:"questions"`
-	Thresholds        map[string]string `json:"thresholds"`
-	UnavailablePolicy string            `json:"advisor_unavailable"`
-	Unavailable       bool              `json:"unavailable"`
-	Failure           string            `json:"failure,omitempty"`
-	LatencyUS         int64             `json:"latency_us"`
-	Outcome           string            `json:"outcome"`
-	PolicyDecision    string            `json:"policy_decision"`
-	ErrorCode         string            `json:"error_code"`
-	Attempts          []EvidenceTier    `json:"attempts"`
+	RecordVersion            int               `json:"record_version"`
+	RecordType               string            `json:"record_type"`
+	ParamsSHA256             string            `json:"original_params_sha256"`
+	InputStateSHA256         string            `json:"input_state_sha256"`
+	OriginalInputStateSHA256 string            `json:"original_input_state_sha256,omitempty"`
+	Truncated                bool              `json:"truncated"`
+	InputRejected            bool              `json:"input_rejected"`
+	Questions                Questions         `json:"questions"`
+	Thresholds               map[string]string `json:"thresholds"`
+	UnavailablePolicy        string            `json:"advisor_unavailable"`
+	Unavailable              bool              `json:"unavailable"`
+	Failure                  string            `json:"failure,omitempty"`
+	LatencyUS                int64             `json:"latency_us"`
+	Outcome                  string            `json:"outcome"`
+	PolicyDecision           string            `json:"policy_decision"`
+	ErrorCode                string            `json:"error_code"`
+	Attempts                 []EvidenceTier    `json:"attempts"`
 }
 
 type EvidenceTier struct {
@@ -40,7 +43,7 @@ type EvidenceTier struct {
 func decimal(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 func NewEvidence(state State, questions Questions, params [32]byte, p Policy, answers Answers, callErr error, latencyUS int64, outcome string) (*Evidence, error) {
-	stateJSON, err := json.Marshal(state)
+	stateJSON, err := MarshalJSON(state)
 	if err != nil {
 		return nil, err
 	}
@@ -49,10 +52,14 @@ func NewEvidence(state State, questions Questions, params [32]byte, p Policy, an
 		RecordVersion: 1, RecordType: "agentgate_advisor", ParamsSHA256: hex.EncodeToString(params[:]),
 		InputStateSHA256: hex.EncodeToString(digest[:]), Questions: questions,
 		Thresholds:        map[string]string{"approval": decimal(p.ApprovalThreshold), "deny": decimal(p.DenyThreshold), "confidence": decimal(p.ConfidenceThreshold)},
-		UnavailablePolicy: p.Unavailable, Unavailable: callErr != nil, LatencyUS: latencyUS, Outcome: outcome, Attempts: []EvidenceTier{},
+		UnavailablePolicy: p.Unavailable, Unavailable: IsUnavailable(callErr), LatencyUS: latencyUS, Outcome: outcome, Attempts: []EvidenceTier{},
+		Truncated: answers.Truncated, InputRejected: answers.Truncated || (callErr != nil && !IsUnavailable(callErr)),
 	}
 	if callErr != nil {
 		e.Failure = "advisor_unavailable"
+		if !IsUnavailable(callErr) {
+			e.Failure = "advisor_input_rejected"
+		}
 	}
 	if len(answers.Attempts) > 0 {
 		e.Thresholds["cascade"] = decimal(answers.CascadeThreshold)
@@ -68,13 +75,9 @@ func NewEvidence(state State, questions Questions, params [32]byte, p Policy, an
 	return e, nil
 }
 
-func (e *Evidence) Bind(policyDecision, errorCode string) (json.RawMessage, [32]byte, error) {
+func (e *Evidence) Record(policyDecision, errorCode string) (json.RawMessage, error) {
 	e.PolicyDecision = policyDecision
 	e.ErrorCode = errorCode
 	canonical, err := receiptspec.CanonicalRecord(e)
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
-	hash, err := receiptspec.HashRecord(json.RawMessage(canonical))
-	return json.RawMessage(canonical), hash, err
+	return json.RawMessage(canonical), err
 }
