@@ -387,7 +387,9 @@ The signature itself is excluded from the preimage.
 `ComputeManifestHash` does not validate manifest semantics.
 Direct calls to `VerifyManifest` do not check the version.
 JSONL manifest parsing requires `format_version = 1`.
-No dedicated manifest string-length, positive-count, or range-consistency checks exist.
+Manifest counts may be zero, but cannot be negative.
+Verification enforces the range and key-window rules in section 9.1.
+No dedicated manifest string-length checks exist.
 
 Manifest JSON members appear in this order:
 
@@ -423,7 +425,11 @@ For an empty selection, both equal the anchor hash.
 `head_seq` and `head_hash` describe the snapshot head.
 The keyset includes all stored signer keys.
 The active signer signs the manifest after the read transaction finishes.
-The endpoint can emit an empty selection, but `VerifyChain` rejects an empty chain.
+A signer lease covers snapshot acquisition through signing, excluding concurrent appends and rotation.
+The lease is released before writing the HTTP response.
+The endpoint can emit an empty selection at `from = head + 1`.
+`VerifyBundle` accepts that signed empty range when its endpoint equals its anchor.
+Bare empty chains remain invalid.
 
 ## 9. Verification algorithm and error classes
 
@@ -438,19 +444,46 @@ The endpoint can emit an empty selection, but `VerifyChain` rejects an empty cha
 5. Reject invalid key length or signature with `ManifestError` wrapping `ErrManifestSignatureInvalid`.
 6. Recompute the embedded keyset digest.
 7. Reject inequality with `ManifestError` wrapping `ErrKeysetDigestMismatch`.
-8. Use the signed manifest's anchor.
-9. Unless explicitly overridden, expect `(resolved_to, last_entry_hash)` as the endpoint.
-10. Run the chain checks below.
+8. Require `valid_from_seq <= head_seq + 1`, evaluated without unsigned overflow.
+9. Require `valid_until_seq` to be nil or at least `head_seq`.
+10. Require `resolved_to <= head_seq`.
+11. Require `resolved_to >= anchor_seq` and nonnegative `count == resolved_to - anchor_seq`.
+12. When `resolved_to == head_seq`, require `head_hash == last_entry_hash`.
+13. Use the signed manifest's anchor.
+14. Unless explicitly overridden, expect `(resolved_to, last_entry_hash)` as the endpoint.
+15. For zero receipts and zero count, require the manifest endpoint to equal the anchor.
+16. Check that empty anchor against any explicit expected head. Otherwise run the chain checks below.
+17. After successful chain checks, require `first_entry_hash` to match the first receipt's entry hash when `count > 0`.
 
-Manifest signing keys are not checked against sequence validity windows.
+Rotation activates the new key at the committed head plus 1.
+An export can use that key before its first receipt exists.
+That is why the lower bound permits `head_seq + 1`, rather than requiring `valid_from_seq <= head_seq`.
+Historical ranges can start before the manifest signer's window. Do not compare its lower bound with the export anchor.
+The upper bound is inclusive, matching receipt key windows.
+An archived export can therefore verify after its signer retires, provided its snapshot head remains within that window.
 Explicit trust replaces embedded keys for lookup, but embedded keys still determine the signed keyset digest.
 Embedded keys alone prove internal consistency, not the producer's identity.
 Pin an independently obtained trust file when identity matters.
 
-The verifier does not separately check manifest `count`, `requested_from`, `requested_to`, or `first_entry_hash`.
-It does not compare `head_seq` or `head_hash` against receipts.
-Those fields are signed but are not independently enforced.
+Manifest consistency failures return `OK = false`, a stable reason, and no Go error.
+
+| Check | `VerifyResult.Reason` | `FailedAtSeq` |
+|---|---|---|
+| Signer outside snapshot window | `manifest_signer_inactive_at_head` | `head_seq` |
+| Endpoint beyond snapshot head | `manifest_resolved_to_beyond_head` | `resolved_to` |
+| Negative count, reversed range, or count mismatch | `manifest_count_mismatch` | `resolved_to` |
+| Full-range head hash differs | `manifest_head_hash_mismatch` | `head_seq` |
+| First receipt hash differs | `manifest_first_entry_hash_mismatch` | First receipt sequence |
+
+Metadata checks precede chain checks, except the first receipt hash comparison follows successful chain verification.
+The first receipt hash failure retains the chain's verified count and clears `Complete`.
+Other manifest consistency failures have zero verified receipts.
+The verifier does not separately check `requested_from` or `requested_to`.
 An explicit expected head replaces the manifest-derived endpoint, rather than adding another endpoint comparison.
+An empty export must still match its own anchor, even with an explicit expected head.
+Key windows cannot prove freshness against a signer's self-selected historical head.
+A retired key can still authenticate its historical window.
+Pin an independent expected head when freshness matters.
 
 ### 9.2 Chain checks
 
@@ -486,6 +519,7 @@ The first failing check determines the result:
 `VerifiedCount` counts only fully checked receipts.
 Unknown signer errors return a zero result, discarding earlier progress.
 `Complete` is true only when a supplied or manifest-derived endpoint matches.
+For authenticated empty ranges, the final verified head is the anchor.
 It means completeness against that endpoint, not against unseen future receipts.
 Without an endpoint, a valid prefix returns `OK = true` and `Complete = false`.
 `VerifyReceipt` checks fields, entry hash, and signature only.
@@ -495,7 +529,7 @@ The CLI exits `0` for success, `1` for mismatches, and `2` for parsing or config
 All `ManifestError` values exit `1`, including an unknown manifest signer.
 An unknown receipt signer exits `2`.
 CLI range reporting uses `resolved_to == head_seq` to label an export `full`.
-That label does not add a head-hash comparison.
+Successful full-range verification also requires the signed head hash to match the endpoint hash.
 
 ## 10. Worked bytes
 
@@ -600,7 +634,13 @@ Tests exercise both explicit and embedded trust.
 | `valid-partial` | `ok`, signed non-genesis anchor |
 | `valid-boundary` | `ok`, maximum sequence and string sizes, 32 delegation elements |
 | `valid-unpinned-prefix` | `ok`, deleted suffix cannot be detected without an endpoint |
-| `valid-unchecked-manifest-count` | `ok`, signed count is not compared with receipts |
+| `manifest-inflated-count` | `manifest_count_mismatch`, inflated signed count |
+| `valid-rotation-straddle` | `ok`, old and new receipt keys, new manifest signer |
+| `valid-rotation-before-first-receipt` | `ok`, new signer starts at snapshot head plus 1 |
+| `valid-historical-range` | `ok`, range starts before the manifest signer's window |
+| `valid-retired-at-boundary` | `ok`, inclusive retired-key upper bound equals snapshot head |
+| `valid-empty-genesis` | `ok`, zero count and genesis anchor |
+| `valid-empty-anchor` | `ok`, zero count and non-genesis anchor |
 | `tampered-body` | `entry_hash_mismatch` |
 | `reordered-chain` | `sequence_gap_or_not_genesis_anchored` |
 | `missing-middle` | `sequence_gap_or_not_genesis_anchored` |
@@ -614,7 +654,15 @@ Tests exercise both explicit and embedded trust.
 | `manifest-mismatch` | `ManifestError/ErrManifestSignatureInvalid` |
 | `manifest-keyset-mismatch` | `ManifestError/ErrKeysetDigestMismatch` |
 | `manifest-unknown-signer` | `ManifestError/ErrUnknownSignerKID` |
-| `manifest-endpoint-mismatch` | `expected_head_mismatch` |
+| `manifest-endpoint-mismatch` | `manifest_resolved_to_beyond_head` |
+| `manifest-retired-signer-full-range` | `manifest_signer_inactive_at_head` |
+| `manifest-signer-before-window` | `manifest_signer_inactive_at_head` |
+| `manifest-count-mismatch` | `manifest_count_mismatch` |
+| `manifest-negative-count` | `manifest_count_mismatch` |
+| `manifest-reversed-range` | `manifest_count_mismatch` |
+| `manifest-first-entry-hash-mismatch` | `manifest_first_entry_hash_mismatch` |
+| `manifest-head-hash-mismatch` | `manifest_head_hash_mismatch` |
+| `manifest-empty-endpoint-mismatch` | `expected_head_mismatch` |
 
 Seeds are public, fixed, test-only values. Never deploy these keys.
 Seed A contains bytes `00` through `1f`. Seed B contains `20` through `3f`.
@@ -622,6 +670,8 @@ The generator writes deterministic files and does not update `encoding-lock.json
 That separate file pins SHA-256 digests of canonical receipt and manifest preimages for every accepted vector.
 `TestV1VersionLock` compares real encoding against those committed digests.
 Do not refresh the v1 lock to hide an encoding change.
+New accepted vectors add lock entries. Rejected vectors no longer need accepted-vector locks.
+Existing accepted-vector hashes and the version-lock test remain unchanged.
 The older independent binary fixture remains in `internal/receipt/testdata/v1`.
 Its filename includes `genesis`, but its encoded sequence is `MaxUint64`, not 1.
 
@@ -634,7 +684,7 @@ Missing JSON versions decode to 0 and are rejected.
 The receipt binary preimage selects v1 through `agentgate.receipt.hash.v1`.
 The manifest preimage includes both its v1 domain and its integer version.
 
-Keep v1 byte encodings and accepted semantics frozen.
+Keep v1 byte encodings and receipt field semantics frozen.
 Changes to field order, widths, endianness, prefixes, or domain strings require v2.
 Changing signed fields, hash algorithms, signature algorithms, or signature messages requires v2.
 Changing params canonicalization or delegation digest meaning requires v2.
@@ -646,6 +696,10 @@ Do not claim that newly emitted values are interoperable unless old v1 readers a
 A v2 implementation needs a new format version, separate domain strings, and `RECEIPT-v2.md`.
 Preserve v1 vectors and verification support.
 
+Tightening manifest verification is outside the wire freeze.
+These checks enforce existing signed fields and key windows without changing their encoding.
+Accepting gateway-produced empty exports also changes no bytes.
+
 ## 13. Existing documentation differences
 
 Code takes precedence for this freeze.
@@ -654,8 +708,6 @@ No discrepancy below changes production behavior.
 - `DECISION.md` calls decision records objects. `CanonicalRecord` also accepts arrays and scalar roots.
 - `DECISION.md` names a canonical-size limit. The code also limits raw input to 1 MiB.
 - The old `genesis-unicode-max.bin` fixture contains sequence `MaxUint64`, not a genesis chain.
-- Manifest comments describe bound metadata. Verification enforces the anchor, endpoint, signature, and keyset digest only.
-- The export endpoint can emit an empty range. The verifier rejects it with `ErrEmptyChain`.
 - Gateway delegation output is 64-character hex. Receipt validation accepts shorter nonhex ASCII elements.
 
 The stream-digest proposal correctly describes an unimplemented v2 feature.

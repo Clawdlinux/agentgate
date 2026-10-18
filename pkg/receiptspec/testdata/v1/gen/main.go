@@ -139,6 +139,22 @@ func generate(out string) {
 	addCommon("valid-partial", receipts[1:], manifest(receipts[1:], receiptspec.Anchor{Seq: 1, EntryHash: first.EntryHash}, third),
 		outcome{Class: "ok", VerifiedCount: 2, Complete: true})
 	addCommon("valid-unpinned-prefix", receipts[:2], nil, outcome{Class: "ok", VerifiedCount: 2})
+	addCommon("valid-rotation-straddle", receipts, full, outcome{Class: "ok", VerifiedCount: 3, Complete: true})
+	addCommon("valid-rotation-before-first-receipt", receipts[:2], manifest(receipts[:2], receiptspec.Anchor{}, second),
+		outcome{Class: "ok", VerifiedCount: 2, Complete: true})
+	historical := manifest(receipts[:1], receiptspec.Anchor{}, third)
+	addCommon("valid-historical-range", receipts[:1], historical, outcome{Class: "ok", VerifiedCount: 1, Complete: true})
+	retiredBoundary := receiptspec.SignManifest(*manifest(receipts[:2], receiptspec.Anchor{}, second), signerA.KID(), privA)
+	addCommon("valid-retired-at-boundary", receipts[:2], &retiredBoundary, outcome{Class: "ok", VerifiedCount: 2, Complete: true})
+	empty := receiptspec.ExportManifest{
+		FormatVersion: 1, RequestedFrom: 1, KeysetDigest: receiptspec.ComputeKeysetDigest(keys),
+	}
+	empty = receiptspec.SignManifest(empty, signerA.KID(), privA)
+	addCommon("valid-empty-genesis", nil, &empty, outcome{Class: "ok", Complete: true})
+	empty.RequestedFrom, empty.ResolvedTo, empty.AnchorSeq, empty.HeadSeq = 4, 3, 3, 3
+	empty.AnchorHash, empty.FirstEntryHash, empty.LastEntryHash, empty.HeadHash = third.EntryHash, third.EntryHash, third.EntryHash, third.EntryHash
+	empty = receiptspec.SignManifest(empty, signerB.KID(), privB)
+	addCommon("valid-empty-anchor", nil, &empty, outcome{Class: "ok", Complete: true})
 
 	maxFields := thirdFields
 	maxFields.HumanPrincipal = strings.Repeat("é", 128)
@@ -199,12 +215,45 @@ func generate(out string) {
 	badManifest.ResolvedTo++
 	badManifest = receiptspec.SignManifest(badManifest, signerB.KID(), privB)
 	addCommon("manifest-endpoint-mismatch", receipts, &badManifest,
-		outcome{Class: receiptspec.ReasonExpectedHeadMismatch, VerifiedCount: 3, FailedAtSeq: 4})
+		outcome{Class: "manifest_resolved_to_beyond_head", FailedAtSeq: 4})
 	badManifest = *full
 	badManifest.Count = 99
 	badManifest = receiptspec.SignManifest(badManifest, signerB.KID(), privB)
-	addCommon("valid-unchecked-manifest-count", receipts, &badManifest,
-		outcome{Class: "ok", VerifiedCount: 3, Complete: true})
+	addCommon("manifest-inflated-count", receipts, &badManifest,
+		outcome{Class: "manifest_count_mismatch", FailedAtSeq: 3})
+
+	retired := receiptspec.SignManifest(*full, signerA.KID(), privA)
+	addCommon("manifest-retired-signer-full-range", receipts, &retired,
+		outcome{Class: "manifest_signer_inactive_at_head", FailedAtSeq: 3})
+	tooEarly := *historical
+	tooEarly.HeadSeq, tooEarly.HeadHash = first.Seq, first.EntryHash
+	tooEarly = receiptspec.SignManifest(tooEarly, signerB.KID(), privB)
+	addCommon("manifest-signer-before-window", receipts[:1], &tooEarly,
+		outcome{Class: "manifest_signer_inactive_at_head", FailedAtSeq: 1})
+	addBadManifest := func(name string, change func(*receiptspec.ExportManifest), want outcome) {
+		m := *full
+		change(&m)
+		m = receiptspec.SignManifest(m, signerB.KID(), privB)
+		addCommon(name, receipts, &m, want)
+	}
+	addBadManifest("manifest-count-mismatch", func(m *receiptspec.ExportManifest) { m.Count-- },
+		outcome{Class: "manifest_count_mismatch", FailedAtSeq: 3})
+	addBadManifest("manifest-negative-count", func(m *receiptspec.ExportManifest) {
+		m.Count, m.ResolvedTo, m.HeadSeq = -1, ^uint64(0), ^uint64(0)
+	}, outcome{Class: "manifest_count_mismatch", FailedAtSeq: ^uint64(0)})
+	addBadManifest("manifest-reversed-range", func(m *receiptspec.ExportManifest) {
+		m.AnchorSeq, m.ResolvedTo, m.Count = ^uint64(0), 0, 1
+	}, outcome{Class: "manifest_count_mismatch"})
+	addBadManifest("manifest-first-entry-hash-mismatch", func(m *receiptspec.ExportManifest) { m.FirstEntryHash[0] ^= 1 },
+		outcome{Class: "manifest_first_entry_hash_mismatch", VerifiedCount: 3, FailedAtSeq: 1})
+	addBadManifest("manifest-head-hash-mismatch", func(m *receiptspec.ExportManifest) { m.HeadHash[0] ^= 1 },
+		outcome{Class: "manifest_head_hash_mismatch", FailedAtSeq: 3})
+	badEmpty := empty
+	badEmpty.HeadSeq++
+	badEmpty.LastEntryHash[0] ^= 1
+	badEmpty = receiptspec.SignManifest(badEmpty, signerB.KID(), privB)
+	addCommon("manifest-empty-endpoint-mismatch", nil, &badEmpty,
+		outcome{Class: receiptspec.ReasonExpectedHeadMismatch, FailedAtSeq: 3})
 
 	preimage, err := receiptspec.CanonicalHashInput(first)
 	check(err)

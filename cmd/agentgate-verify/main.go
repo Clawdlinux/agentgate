@@ -18,9 +18,9 @@ Licensed under the Apache License, Version 2.0.
 // --trust-root points to a JSON file of trusted signer keys (the same
 // shape GET /v1/receipts/pubkey serves), saved once through a trusted
 // channel; required unless the jsonl source embeds its own keys.
-// --expected-head SEQ:HEXHASH overrides any manifest-derived expected head
-// and additionally proves the checked range is complete, not merely
-// internally consistent.
+// --expected-head SEQ:HEXHASH overrides any manifest-derived expected head.
+// It checks completeness against an independently recorded checkpoint.
+// A signed manifest endpoint alone does not prove freshness.
 //
 // Exit codes: 0 = all requested checks passed, 1 = chain, key, manifest,
 // or signature mismatch, 2 = I/O, syntax, or configuration error.
@@ -59,7 +59,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&source, "source", "", "receipt source: sqlite | jsonl")
 	fs.StringVar(&path, "path", "", "input path; '-' means stdin (jsonl source only)")
 	fs.StringVar(&trustRoot, "trust-root", "", "path to a JSON trust file; optional if the jsonl source embeds its own keys")
-	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH; overrides a manifest-derived expected head")
+	fs.StringVar(&expectedHead, "expected-head", "", "optional SEQ:HEXHASH; pin an independent checkpoint; a manifest alone does not prove freshness")
 	fs.StringVar(&outputFormat, "format", "text", "output format: text | json")
 	fs.BoolVar(&quiet, "quiet", false, "suppress successful verification details in text output")
 	fs.BoolVar(&quiet, "q", false, "suppress successful verification details in text output")
@@ -154,15 +154,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		if result.Complete {
-			fmt.Fprintln(stdout, "completeness: proven against the supplied expected head")
+			if explicitExpected != nil {
+				fmt.Fprintln(stdout, "completeness: proven against the supplied expected head")
+			} else {
+				fmt.Fprintln(stdout, "completeness: proven against the signed manifest endpoint; freshness not proven (pass --expected-head)")
+			}
 		} else {
 			fmt.Fprintln(stdout, "completeness: not claimed (no --expected-head supplied)")
 		}
 		if manifest != nil {
 			if rangeKind == "full" {
-				fmt.Fprintln(stdout, "range: full (reaches the database's true head at export time)")
+				fmt.Fprintln(stdout, "range: full (reaches the signed manifest head)")
 			} else {
-				fmt.Fprintf(stdout, "range: partial (head at export time was seq=%d)\n", manifest.HeadSeq)
+				fmt.Fprintf(stdout, "range: partial (signed manifest head was seq=%d)\n", manifest.HeadSeq)
 			}
 		}
 		return 0

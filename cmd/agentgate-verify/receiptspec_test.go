@@ -12,10 +12,70 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
+
+func TestRunManifestGoldenVectors(t *testing.T) {
+	dir := filepath.Join("..", "..", "pkg", "receiptspec", "testdata", "v1")
+	data, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Vectors []struct {
+			Name     string `json:"name"`
+			JSONL    string `json:"jsonl"`
+			Keys     string `json:"keys"`
+			Expected struct {
+				Class    string `json:"class"`
+				Complete bool   `json:"complete"`
+			} `json:"expected"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range catalog.Vectors {
+		if v.Expected.Class != "ok" && !strings.HasPrefix(v.Expected.Class, "manifest_") {
+			continue
+		}
+		t.Run(v.Name, func(t *testing.T) {
+			for _, explicitTrust := range []bool{false, true} {
+				for _, format := range []string{"text", "json"} {
+					args := []string{"--source", "jsonl", "--path", filepath.Join(dir, v.JSONL), "--format", format}
+					if explicitTrust {
+						args = append(args, "--trust-root", filepath.Join(dir, v.Keys))
+					}
+					var stdout, stderr bytes.Buffer
+					code := run(args, &stdout, &stderr)
+					wantCode := 1
+					if v.Expected.Class == "ok" {
+						wantCode = 0
+					}
+					if code != wantCode {
+						t.Fatalf("trust=%v format=%s: exit %d, want %d; stdout=%s stderr=%s",
+							explicitTrust, format, code, wantCode, stdout.String(), stderr.String())
+					}
+					if format == "json" {
+						var got jsonResult
+						if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+							t.Fatal(err)
+						}
+						if got.OK != (wantCode == 0) || got.Complete != v.Expected.Complete ||
+							(wantCode == 1 && got.Reason != v.Expected.Class) {
+							t.Fatalf("trust=%v: result %+v, want %+v", explicitTrust, got, v.Expected)
+						}
+					} else if wantCode == 1 && !strings.Contains(stderr.String(), "reason="+v.Expected.Class) {
+						t.Fatalf("missing reason in stderr: %s", stderr.String())
+					}
+				}
+			}
+		})
+	}
+}
 
 // A second producer that only uses pkg/receiptspec must verify with this command.
 func TestRunVerifiesReceiptspecChain(t *testing.T) {

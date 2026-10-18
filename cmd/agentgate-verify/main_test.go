@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -544,6 +545,56 @@ func TestRun_JSONLExport_FullRangeSelfContained(t *testing.T) {
 	}
 	if !bytes.Contains(stdout.Bytes(), []byte("range: full")) {
 		t.Fatalf("stdout = %s, want 'range: full'", stdout.String())
+	}
+}
+
+func TestRun_JSONLExport_CompletenessProvenance(t *testing.T) {
+	jsonlPath, _ := buildTestExportJSONL(t, 5, "from=1")
+	bundle, err := readJSONL(jsonlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		expectedHead string
+		completeness string
+	}{
+		{
+			name:         "manifest-endpoint",
+			completeness: "completeness: proven against the signed manifest endpoint; freshness not proven (pass --expected-head)",
+		},
+		{
+			name:         "explicit-expected-head",
+			expectedHead: fmt.Sprintf("%d:%x", bundle.Manifest.ResolvedTo, bundle.Manifest.LastEntryHash),
+			completeness: "completeness: proven against the supplied expected head",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"--source", "jsonl", "--path", jsonlPath}
+			if tc.expectedHead != "" {
+				args = append(args, "--expected-head", tc.expectedHead)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+			}
+			output := stdout.String()
+			if !strings.Contains(output, tc.completeness+"\n") {
+				t.Fatalf("missing completeness provenance: %s", output)
+			}
+			if !strings.Contains(output, "range: full (reaches the signed manifest head)\n") {
+				t.Fatalf("missing signed range provenance: %s", output)
+			}
+			if strings.Contains(output, "database's true head") {
+				t.Fatalf("unproven database head claim: %s", output)
+			}
+			if tc.expectedHead == "" && strings.Contains(output, "supplied expected head") {
+				t.Fatalf("unproven external head claim: %s", output)
+			}
+			if tc.expectedHead != "" && strings.Contains(output, "freshness not proven") {
+				t.Fatalf("unexpected manifest-only caveat: %s", output)
+			}
+		})
 	}
 }
 

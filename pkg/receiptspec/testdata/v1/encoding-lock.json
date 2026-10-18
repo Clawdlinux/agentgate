@@ -25,13 +25,41 @@
     ],
     "manifest": "74a034547f23baccf6b021c8e44bbcc72bd16c032ae649393bbbbc6ef1c3dc40"
   },
-  "valid-unchecked-manifest-count": {
+  "valid-empty-anchor": {
+    "receipts": null,
+    "manifest": "1d540dc0de53bbfe8b423f29a18ecbb79767214d8e2197439046196225063bb1"
+  },
+  "valid-empty-genesis": {
+    "receipts": null,
+    "manifest": "6313c1644f1c2580d95ba716498ba37203b0d18d42c3bc122fff26739d6f9c35"
+  },
+  "valid-historical-range": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138"
+    ],
+    "manifest": "b9fa57bd4c246753df6ab306c4bdcf759ef8c80a906b584a463bf493b74c95a6"
+  },
+  "valid-retired-at-boundary": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2"
+    ],
+    "manifest": "40c283695b8eb1d8f19be04875d1d175735a77e854394aed7edc65252fc758c0"
+  },
+  "valid-rotation-before-first-receipt": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2"
+    ],
+    "manifest": "fd2d1a0c4af7f20c6a32b96865e16f2a863a685b8ebafe85a8cd847a4fd8c844"
+  },
+  "valid-rotation-straddle": {
     "receipts": [
       "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
       "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2",
       "559b87ae267e480b80e34aacf5111f94d200c94ef8fa111296965cad3d43b695"
     ],
-    "manifest": "965801b7579b6d543114d768ea871ced95867776f73f612bdb3133855b9597e8"
+    "manifest": "8e8fb7b9943680a29e9ed35e93ad243d59e2b6ddf3c95c003e2c678d99810155"
   },
   "valid-unpinned-prefix": {
     "receipts": [

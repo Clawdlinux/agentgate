@@ -18,13 +18,18 @@ import (
 // Reason values are stable ASCII and never derived from a receipt's own
 // fields, so they are safe to print without leaking receipted data.
 const (
-	ReasonSequenceGap          = "sequence_gap_or_not_genesis_anchored"
-	ReasonPrevHashMismatch     = "prev_hash_mismatch"
-	ReasonInvalidReceiptFields = "invalid_receipt_fields"
-	ReasonEntryHashMismatch    = "entry_hash_mismatch"
-	ReasonSignatureInvalid     = "signature_invalid"
-	ReasonSignerInactiveAtSeq  = "signer_kid_inactive_at_seq"
-	ReasonExpectedHeadMismatch = "expected_head_mismatch"
+	ReasonSequenceGap                    = "sequence_gap_or_not_genesis_anchored"
+	ReasonPrevHashMismatch               = "prev_hash_mismatch"
+	ReasonInvalidReceiptFields           = "invalid_receipt_fields"
+	ReasonEntryHashMismatch              = "entry_hash_mismatch"
+	ReasonSignatureInvalid               = "signature_invalid"
+	ReasonSignerInactiveAtSeq            = "signer_kid_inactive_at_seq"
+	ReasonExpectedHeadMismatch           = "expected_head_mismatch"
+	ReasonManifestSignerInactiveAtHead   = "manifest_signer_inactive_at_head"
+	ReasonManifestResolvedToBeyondHead   = "manifest_resolved_to_beyond_head"
+	ReasonManifestCountMismatch          = "manifest_count_mismatch"
+	ReasonManifestFirstEntryHashMismatch = "manifest_first_entry_hash_mismatch"
+	ReasonManifestHeadHashMismatch       = "manifest_head_hash_mismatch"
 )
 
 var (
@@ -130,12 +135,12 @@ type VerifyResult struct {
 	OK            bool
 	TotalReceipts int
 	VerifiedCount int
-	FailedAtSeq   uint64 // 0 only when OK and no failure occurred
+	FailedAtSeq   uint64 // 0 also identifies a manifest failure at genesis
 	Reason        string // one of the Reason* constants; empty when OK
 	HeadSeq       uint64
 	HeadEntryHash [32]byte
 	// Complete is true only when an ExpectedHead was supplied and matched the
-	// final receipt. False means completeness was not claimed, not tampering.
+	// final receipt or an authenticated empty range's anchor.
 	Complete bool
 }
 
@@ -209,6 +214,11 @@ func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, anchor Anchor, ex
 	}
 
 	result.OK = true
+	return verifyExpectedHead(result, expectedHead), nil
+}
+
+func verifyExpectedHead(result VerifyResult, expectedHead *ExpectedHead) VerifyResult {
+	result.Complete = false
 	if expectedHead != nil {
 		if result.HeadSeq == expectedHead.Seq && result.HeadEntryHash == expectedHead.EntryHash {
 			result.Complete = true
@@ -218,7 +228,7 @@ func VerifyChain(receipts []Receipt, trustedKeys []TrustedKey, anchor Anchor, ex
 			result.Reason = ReasonExpectedHeadMismatch
 		}
 	}
-	return result, nil
+	return result
 }
 
 // ManifestError wraps a manifest verification failure from VerifyBundle.
@@ -235,8 +245,9 @@ func (e *ManifestError) Unwrap() error { return e.Err }
 
 // VerifyBundle verifies a parsed source the way agentgate-verify does.
 // trusted overrides b.Keys when non-empty; otherwise the embedded keys are
-// the trust set. A manifest, if present, must verify (else *ManifestError)
-// and then supplies the anchor and, unless expected is set, the expected head.
+// the trust set. Signature and trust failures return *ManifestError.
+// A manifest supplies the anchor and, unless expected is set, the expected head.
+// Manifest consistency failures return a failed result with a Reason constant.
 func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (VerifyResult, error) {
 	if len(trusted) == 0 {
 		trusted = b.Keys
@@ -244,12 +255,33 @@ func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (Verif
 	anchor := Anchor{}
 	if b.Manifest != nil {
 		if err := VerifyManifest(*b.Manifest, trusted, b.Keys); err != nil {
+			var failure *manifestCheckError
+			if errors.As(err, &failure) {
+				return VerifyResult{
+					TotalReceipts: len(b.Receipts), FailedAtSeq: failure.seq, Reason: failure.reason,
+				}, nil
+			}
 			return VerifyResult{}, &ManifestError{Err: err}
 		}
 		anchor = Anchor{Seq: b.Manifest.AnchorSeq, EntryHash: b.Manifest.AnchorHash}
 		if expected == nil {
 			expected = &ExpectedHead{Seq: b.Manifest.ResolvedTo, EntryHash: b.Manifest.LastEntryHash}
 		}
+		if len(b.Receipts) == 0 && b.Manifest.Count == 0 {
+			result := VerifyResult{OK: true, HeadSeq: anchor.Seq, HeadEntryHash: anchor.EntryHash}
+			result = verifyExpectedHead(result, &ExpectedHead{Seq: b.Manifest.ResolvedTo, EntryHash: b.Manifest.LastEntryHash})
+			if !result.OK {
+				return result, nil
+			}
+			return verifyExpectedHead(result, expected), nil
+		}
 	}
-	return VerifyChain(b.Receipts, trusted, anchor, expected)
+	result, err := VerifyChain(b.Receipts, trusted, anchor, expected)
+	if err == nil && result.OK && b.Manifest != nil && b.Manifest.Count > 0 &&
+		b.Manifest.FirstEntryHash != b.Receipts[0].EntryHash {
+		result.OK, result.Complete = false, false
+		result.FailedAtSeq = b.Receipts[0].Seq
+		result.Reason = ReasonManifestFirstEntryHashMismatch
+	}
+	return result, err
 }

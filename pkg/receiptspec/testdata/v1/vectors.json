@@ -46,6 +46,72 @@
       }
     },
     {
+      "name": "valid-rotation-straddle",
+      "jsonl": "valid-rotation-straddle.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 3,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-rotation-before-first-receipt",
+      "jsonl": "valid-rotation-before-first-receipt.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 2,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-historical-range",
+      "jsonl": "valid-historical-range.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 1,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-retired-at-boundary",
+      "jsonl": "valid-retired-at-boundary.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 2,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-empty-genesis",
+      "jsonl": "valid-empty-genesis.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-empty-anchor",
+      "jsonl": "valid-empty-anchor.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
       "name": "valid-boundary",
       "jsonl": "valid-boundary.jsonl",
       "keys": "public-keys.json",
@@ -204,21 +270,109 @@
       "jsonl": "manifest-endpoint-mismatch.jsonl",
       "keys": "public-keys.json",
       "expected": {
-        "class": "expected_head_mismatch",
-        "verified_count": 3,
+        "class": "manifest_resolved_to_beyond_head",
+        "verified_count": 0,
         "failed_at_seq": 4,
         "complete": false
       }
     },
     {
-      "name": "valid-unchecked-manifest-count",
-      "jsonl": "valid-unchecked-manifest-count.jsonl",
+      "name": "manifest-inflated-count",
+      "jsonl": "manifest-inflated-count.jsonl",
       "keys": "public-keys.json",
       "expected": {
-        "class": "ok",
-        "verified_count": 3,
+        "class": "manifest_count_mismatch",
+        "verified_count": 0,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-retired-signer-full-range",
+      "jsonl": "manifest-retired-signer-full-range.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_signer_inactive_at_head",
+        "verified_count": 0,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-signer-before-window",
+      "jsonl": "manifest-signer-before-window.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_signer_inactive_at_head",
+        "verified_count": 0,
+        "failed_at_seq": 1,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-count-mismatch",
+      "jsonl": "manifest-count-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_count_mismatch",
+        "verified_count": 0,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-negative-count",
+      "jsonl": "manifest-negative-count.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_count_mismatch",
+        "verified_count": 0,
+        "failed_at_seq": 18446744073709551615,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-reversed-range",
+      "jsonl": "manifest-reversed-range.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_count_mismatch",
+        "verified_count": 0,
         "failed_at_seq": 0,
-        "complete": true
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-first-entry-hash-mismatch",
+      "jsonl": "manifest-first-entry-hash-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_first_entry_hash_mismatch",
+        "verified_count": 3,
+        "failed_at_seq": 1,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-head-hash-mismatch",
+      "jsonl": "manifest-head-hash-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "manifest_head_hash_mismatch",
+        "verified_count": 0,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-empty-endpoint-mismatch",
+      "jsonl": "manifest-empty-endpoint-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "expected_head_mismatch",
+        "verified_count": 0,
+        "failed_at_seq": 3,
+        "complete": false
       }
     }
   ]
