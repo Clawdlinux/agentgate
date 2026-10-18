@@ -64,7 +64,7 @@ func main() {
 	if err := json.Unmarshal(data, &secret); err != nil || secret.Key == "" {
 		log.Fatal("invalid credential file")
 	}
-	tr := &http.Transport{MaxIdleConns: 1024, MaxIdleConnsPerHost: 1024, MaxConnsPerHost: 1024}
+	tr := &http.Transport{MaxIdleConns: 128, MaxIdleConnsPerHost: 128, MaxConnsPerHost: 128}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 15 * time.Second}
 	act := func(scheduled time.Time, id int) sample {

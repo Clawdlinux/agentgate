@@ -31,7 +31,7 @@ Both modes run with 0 ms and 5 ms mock delays.
 Open-loop latency starts at each request's original scheduled arrival.
 Late arrivals never reset the schedule or drop requests.
 Dispatch lag and client connection waits stay in latency.
-The client uses at most 1,024 connections. Pool waits remain measured.
+The client uses at most 128 connections. Pool waits remain measured.
 Closed-loop timing starts immediately before `Client.Do`.
 Both timers end after reading and closing the entire response body.
 

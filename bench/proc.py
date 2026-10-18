@@ -71,10 +71,11 @@ def main():
                 completed = subprocess.run(command, env=dict(os.environ, GOMAXPROCS="2"),
                                            text=True, capture_output=True)
                 (directory / "loadgen.log").write_text(completed.stdout + completed.stderr)
-                if completed.returncode:
+                if completed.returncode and not completed.stdout.strip().startswith("{"):
                     print(completed.stdout + completed.stderr, flush=True)
                     raise RuntimeError(f"load generator failed: {directory}")
-                result = dict(json.loads(completed.stdout), delay=delay, name=name)
+                result = dict(json.loads(completed.stdout), delay=delay, name=name,
+                              functional_pass=completed.returncode == 0)
                 results.append(result)
                 print(json.dumps(result), flush=True)
                 (directory / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -91,6 +92,8 @@ def main():
                     file.close()
     (root / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(f"Results: {root}", flush=True)
+    if any(not result["functional_pass"] for result in results):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
