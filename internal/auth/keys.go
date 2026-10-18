@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/hkdf"
 )
@@ -198,6 +199,9 @@ func (s *KeyStore) Validate(ctx context.Context, plaintext string) (*AgentKey, e
 	digest := sha256.Sum256([]byte(plaintext))
 	key, generation := s.cached(digest)
 	if key != nil {
+		if key.ID == receiptspec.AdvisorAgentKeyID {
+			return nil, ErrKeyNotFound
+		}
 		return key, nil
 	}
 	var err error
@@ -208,6 +212,9 @@ func (s *KeyStore) Validate(ctx context.Context, plaintext string) (*AgentKey, e
 	}
 	if err != nil {
 		return nil, err
+	}
+	if key.ID == receiptspec.AdvisorAgentKeyID {
+		return nil, ErrKeyNotFound
 	}
 	s.cacheKey(digest, key, generation)
 	return key, nil

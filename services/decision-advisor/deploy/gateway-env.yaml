@@ -1,0 +1,14 @@
+# Helm fragment. Merge into your gateway container's env list.
+# Leave AGENTGATE_ADVISOR_URL unset when advisor.enabled is false.
+{{- if .Values.advisor.enabled }}
+- name: AGENTGATE_ADVISOR_URL
+  value: http://decision-advisor.{{ .Release.Namespace }}.svc.cluster.local:8081
+- name: AGENTGATE_ADVISOR_UNAVAILABLE
+  value: {{ .Values.advisor.unavailable | quote }}
+- name: AGENTGATE_ADVISOR_APPROVAL_THRESHOLD
+  value: {{ .Values.advisor.approvalThreshold | quote }}
+- name: AGENTGATE_ADVISOR_DENY_THRESHOLD
+  value: {{ .Values.advisor.denyThreshold | quote }}
+- name: AGENTGATE_ADVISOR_CONFIDENCE_THRESHOLD
+  value: {{ .Values.advisor.confidenceThreshold | quote }}
+{{- end }}

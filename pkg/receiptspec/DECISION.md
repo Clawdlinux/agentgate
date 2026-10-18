@@ -66,6 +66,49 @@ Encode fractions as decimal strings (`"0.875"`) or integer micro-units
 (`875000`). Never as floats. Go `float64` fields that hold whole numbers pass;
 fractional ones fail, so do not rely on that.
 
+## Advisor producer and JSONL bundles
+
+The gateway's action receipt always hashes its original params.
+The separate advisor producer uses `Service="advisor"` and `Action="decision:advise"`.
+Its `AgentKeyID` is the reserved `agentgate:advisor`.
+`IsAdvisorReceipt` requires all 3 fields.
+Older receipts with matching names and ordinary agent IDs remain ordinary receipts.
+Modern API key IDs contain 32 lowercase hex characters, so they cannot equal this reserved identity.
+Authentication also rejects the reserved ID in legacy rows and cached identities.
+Requests targeting service `advisor` or actions beginning `decision:` return 400 without a receipt.
+Registry loading rejects the reserved service name.
+Its companion receipt follows the action receipt in the same transaction.
+The decision record includes `action_receipt`, with the preceding sequence, entry hash, and params digest.
+`VerifyAdvisorRecord` checks that link after `VerifyRecordBinding`.
+
+The default JSONL export remains the frozen v1 format.
+It omits separate records and remains readable by released v0.1.x chain verifiers.
+Request `GET /v1/receipts/export?from=1&records=1` for the opt-in record extension.
+It adds `{"type":"record","seq":42,"record":{...}}` after the corresponding receipt.
+This line type is outside the [frozen default format](../../docs/spec/RECEIPT-v1.md#7-jsonl-encoding).
+Receipt lines and manifest encoding stay unchanged.
+`Bundle.Records` holds these separate objects.
+Without record lines, `VerifyBundle` verifies the chain and counts unchecked companions in `UncheckedAdvisorRecords`.
+The CLI prints that count as a note, even under `--quiet`.
+JSON output exposes `unchecked_advisor_records` when nonzero.
+`Bundle.RequireAdvisorRecords` or CLI `--require-advisor-records` requires evidence even when no records were supplied.
+Any supplied record lines also require records for every advisor companion in the bundle.
+Those modes reject missing advisor records, altered bindings, and orphaned records.
+Use the opt-in export or SQLite source to supply evidence.
+The default export provides chain verification, not complete advisor evidence.
+If every record line is stripped, default verification reports unchecked companions instead of asserting evidence verification.
+Require records explicitly for evidence-critical audits.
+Do not send the extension to older readers.
+
+A record-enabled range can begin with a companion.
+After manifest verification, `VerifyAdvisorRecordAtAnchor` checks its `prev_hash` against the signed anchor hash.
+The record's action sequence and entry hash must match the signed anchor sequence and hash.
+The record still must match the companion's params digest and policy outcome.
+The anchor does not expose the preceding action's params digest.
+Include the action receipt to compare that digest independently.
+A leading companion without a signed manifest still fails chain verification.
+V1 cannot prove that every risky gateway action has an advisor companion.
+
 Go structs, maps, and `json.RawMessage` that carry the same content hash the
 same. A test checks the output against the JCS library the gateway uses for
 params.

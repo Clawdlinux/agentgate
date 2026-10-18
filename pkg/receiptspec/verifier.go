@@ -132,13 +132,15 @@ func ParseExpectedHead(s string) (ExpectedHead, error) {
 // VerifyResult reports one verification. Every field is a count, a sequence
 // number, a hash, or a Reason constant, so it is safe to print in full.
 type VerifyResult struct {
-	OK            bool
-	TotalReceipts int
-	VerifiedCount int
-	FailedAtSeq   uint64 // 0 also identifies a manifest failure at genesis
-	Reason        string // one of the Reason* constants; empty when OK
-	HeadSeq       uint64
-	HeadEntryHash [32]byte
+	OK bool
+	// UncheckedAdvisorRecords counts companions whose evidence was neither supplied nor required.
+	UncheckedAdvisorRecords int
+	TotalReceipts           int
+	VerifiedCount           int
+	FailedAtSeq             uint64 // 0 also identifies a manifest failure at genesis
+	Reason                  string // one of the Reason* constants; empty when OK
+	HeadSeq                 uint64
+	HeadEntryHash           [32]byte
 	// Complete is true only when an ExpectedHead was supplied and matched the
 	// final receipt or an authenticated empty range's anchor.
 	Complete bool
@@ -248,6 +250,8 @@ func (e *ManifestError) Unwrap() error { return e.Err }
 // the trust set. Signature and trust failures return *ManifestError.
 // A manifest supplies the anchor and, unless expected is set, the expected head.
 // Manifest consistency failures return a failed result with a Reason constant.
+// Without records, verification is chain-only and reports unchecked advisor companions.
+// Any supplied records or RequireAdvisorRecords enable mandatory advisor evidence checks.
 func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (VerifyResult, error) {
 	if len(trusted) == 0 {
 		trusted = b.Keys
@@ -268,6 +272,9 @@ func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (Verif
 			expected = &ExpectedHead{Seq: b.Manifest.ResolvedTo, EntryHash: b.Manifest.LastEntryHash}
 		}
 		if len(b.Receipts) == 0 && b.Manifest.Count == 0 {
+			if len(b.Records) > 0 {
+				return VerifyResult{Reason: "orphan_record"}, nil
+			}
 			result := VerifyResult{OK: true, HeadSeq: anchor.Seq, HeadEntryHash: anchor.EntryHash}
 			result = verifyExpectedHead(result, &ExpectedHead{Seq: b.Manifest.ResolvedTo, EntryHash: b.Manifest.LastEntryHash})
 			if !result.OK {
@@ -282,6 +289,47 @@ func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (Verif
 		result.OK, result.Complete = false, false
 		result.FailedAtSeq = b.Receipts[0].Seq
 		result.Reason = ReasonManifestFirstEntryHashMismatch
+	}
+	if err == nil && result.OK {
+		checkAdvisorRecords := b.RequireAdvisorRecords || len(b.Records) > 0
+		seen := make(map[uint64]bool)
+		for i, r := range b.Receipts {
+			record, exists := b.Records[r.Seq]
+			seen[r.Seq] = true
+			var bindingErr error
+			if IsAdvisorReceipt(r) {
+				if !checkAdvisorRecords {
+					result.UncheckedAdvisorRecords++
+					continue
+				}
+				if !exists {
+					bindingErr = ErrAdvisorBinding
+				} else if i == 0 {
+					if b.Manifest == nil {
+						bindingErr = ErrAdvisorBinding
+					} else {
+						bindingErr = VerifyAdvisorRecordAtAnchor(anchor, r, record)
+					}
+				} else {
+					bindingErr = VerifyAdvisorRecord(b.Receipts[i-1], r, record)
+				}
+			} else if exists {
+				bindingErr = VerifyRecordBinding(r, record)
+			}
+			if bindingErr != nil {
+				result.OK, result.Complete = false, false
+				result.FailedAtSeq, result.Reason = r.Seq, "advisor_record_binding_invalid"
+				result.VerifiedCount = i
+				return result, nil
+			}
+		}
+		for seq := range b.Records {
+			if !seen[seq] {
+				result.OK, result.Complete = false, false
+				result.FailedAtSeq, result.Reason = seq, "orphan_record"
+				return result, nil
+			}
+		}
 	}
 	return result, err
 }

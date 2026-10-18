@@ -31,3 +31,7 @@ dist/
 
 # Local benchmark data, profiles, and Go caches
 /.cache/
+
+# Python service bytecode
+__pycache__/
+*.pyc

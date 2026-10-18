@@ -130,7 +130,7 @@ type lineTypeProbe struct {
 	Type string `json:"type"`
 }
 
-// DetectJSONLLineType returns "manifest", "key", or "receipt" for one JSONL
+// DetectJSONLLineType returns "manifest", "key", "record", or "receipt" for one JSONL
 // line. A missing or empty "type" field defaults to "receipt", so the
 // original plain receipt-per-line format keeps parsing.
 func DetectJSONLLineType(line []byte) string {
@@ -142,16 +142,19 @@ func DetectJSONLLineType(line []byte) string {
 }
 
 // Bundle is the parsed content of one JSONL source: receipts in file order,
-// any embedded "key" lines, and the "manifest" line if present.
+// embedded keys, separate records, and the manifest if present.
 type Bundle struct {
 	Receipts []Receipt
 	Keys     []TrustedKey
 	Manifest *ExportManifest
+	Records  map[uint64]json.RawMessage
+	// RequireAdvisorRecords disables chain-only fallback when no record lines were supplied.
+	RequireAdvisorRecords bool
 }
 
 // ReadJSONL parses every non-empty line of r. "key" lines go to Keys, a
 // "manifest" line becomes Manifest (a later one overwrites an earlier one),
-// and every other line is parsed as a receipt.
+// separate "record" lines populate Records. Other lines are parsed as receipts.
 func ReadJSONL(r io.Reader) (Bundle, error) {
 	var b Bundle
 	scanner := bufio.NewScanner(r)
@@ -164,6 +167,18 @@ func ReadJSONL(r io.Reader) (Bundle, error) {
 			continue
 		}
 		switch DetectJSONLLineType(line) {
+		case "record":
+			seq, record, err := ParseRecordLine(line)
+			if err != nil {
+				return Bundle{}, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			if b.Records == nil {
+				b.Records = make(map[uint64]json.RawMessage)
+			}
+			if _, exists := b.Records[seq]; exists {
+				return Bundle{}, fmt.Errorf("line %d: duplicate record", lineNum)
+			}
+			b.Records[seq] = record
 		case "manifest":
 			m, err := ParseManifestLine(line)
 			if err != nil {

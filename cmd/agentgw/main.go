@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Clawdlinux/agentgate/internal/admin"
+	"github.com/Clawdlinux/agentgate/internal/advisor"
 	"github.com/Clawdlinux/agentgate/internal/auth"
 	agentgatedb "github.com/Clawdlinux/agentgate/internal/db"
 	"github.com/Clawdlinux/agentgate/internal/delegation"
@@ -66,6 +67,17 @@ func main() {
 	if err != nil {
 		logger.Error("load rate limits", "error", err)
 		os.Exit(1)
+	}
+	advisorClient, advisorPolicy, err := loadAdvisor()
+	if err != nil {
+		logger.Error("load advisor config", "error", err)
+		os.Exit(1)
+	}
+	// Keep the interface nil when disabled. A typed nil would enable the advisor.
+	var decisionAdvisor advisor.Advisor
+	if advisorClient != nil {
+		decisionAdvisor = advisorClient
+		defer advisorClient.CloseIdleConnections()
 	}
 
 	// Load service registry.
@@ -172,14 +184,16 @@ func main() {
 	oauthProviders := buildOAuthProviders(reg, logger)
 
 	srv := gateway.New(gateway.Config{
-		Registry:   reg,
-		Vault:      vaultStore,
-		Logger:     logger,
-		Authorizer: keyStore,
-		Receipts:   ledger,
-		Limiter:    limiter,
-		Delegation: delegationVerifier,
-		Refreshers: buildTokenRefreshers(oauthProviders),
+		Registry:      reg,
+		Vault:         vaultStore,
+		Logger:        logger,
+		Authorizer:    keyStore,
+		Receipts:      ledger,
+		Limiter:       limiter,
+		Delegation:    delegationVerifier,
+		Refreshers:    buildTokenRefreshers(oauthProviders),
+		Advisor:       decisionAdvisor,
+		AdvisorPolicy: advisorPolicy,
 	})
 	defer srv.CloseIdleConnections()
 
@@ -206,6 +220,7 @@ func main() {
 	mux.Handle("POST /admin/tokens", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ConnectBearerToken)))
 	mux.Handle("GET /admin/tokens/{user_id}", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListTokens)))
 	mux.Handle("GET /v1/receipts/export", adminHandler.RequireAdmin(receipt.ExportHandler(database, signerStore)))
+	mux.Handle("GET /v1/receipts/{seq}/evidence", adminHandler.RequireAdmin(receipt.EvidenceHandler(ledger)))
 	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
 	mux.HandleFunc("POST /admin/login", adminHandler.Login)
 	mux.Handle("POST /admin/logout", adminHandler.RequireAdmin(http.HandlerFunc(adminHandler.Logout)))

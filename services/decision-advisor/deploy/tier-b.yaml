@@ -1,0 +1,64 @@
+# Scheduling fragment only. No inference endpoint is claimed by this scaffold.
+{{- if and .Values.advisor.enabled .Values.advisor.tierB.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decision-advisor-tier-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: decision-advisor-tier-b
+  template:
+    metadata:
+      labels:
+        app: decision-advisor-tier-b
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.advisor.tierB.nodeSelector | nindent 8 }}
+      containers:
+        - name: decision-advisor
+          image: {{ .Values.advisor.image | quote }}
+          # Deliberately fails startup while the runtime adapter is unverified.
+          env:
+            - name: ADVISOR_BACKEND
+              value: vllm-sr
+            - name: ADVISOR_TIER_A_MODEL_DIR
+              value: {{ .Values.advisor.tierB.modelDir | quote }}
+            - name: ADVISOR_TIER_A_REVISION
+              value: {{ .Values.advisor.tierB.revision | quote }}
+          resources:
+            requests:
+              cpu: "2"
+              memory: 24Gi
+            limits:
+              {{ .Values.advisor.tierB.gpuResource }}: 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ .Values.advisor.tierA.modelPVC | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: decision-advisor-no-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: decision-advisor-tier-b
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress: []
+{{- end }}

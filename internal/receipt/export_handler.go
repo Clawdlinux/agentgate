@@ -16,6 +16,7 @@ import (
 	"strconv"
 
 	"github.com/Clawdlinux/agentgate/internal/signer"
+	"github.com/Clawdlinux/agentgate/pkg/receiptspec"
 )
 
 // MaxExportRange caps the number of receipts one export request may
@@ -79,10 +80,12 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		withRecords := r.URL.Query().Get("records") == "1"
 
 		var manifest ExportManifest
 		var receipts []Receipt
 		var keys []TrustedKey
+		records := make(map[uint64]json.RawMessage)
 		status := http.StatusInternalServerError
 		snapshotStarted := false
 		// Acquire the signer lease before SQLite, matching the ledger's lock order.
@@ -119,6 +122,42 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 			receipts, err = queryReceiptRange(ctx, tx, from, resolvedTo)
 			if err != nil {
 				return errors.New("read receipts failed")
+			}
+			if withRecords {
+				recordRows, err := tx.QueryContext(ctx, "SELECT seq, record_json FROM receipt_records WHERE seq>=? AND seq<=?", from, resolvedTo)
+				if err != nil {
+					return errors.New("read records failed")
+				}
+				for recordRows.Next() {
+					var seq uint64
+					var record []byte
+					if err := recordRows.Scan(&seq, &record); err != nil {
+						recordRows.Close()
+						return err
+					}
+					records[seq] = record
+				}
+				if err := recordRows.Err(); err != nil {
+					recordRows.Close()
+					return err
+				}
+				if err := recordRows.Close(); err != nil {
+					return err
+				}
+				for i, rec := range receipts {
+					record, exists := records[rec.Seq]
+					if receiptspec.IsAdvisorReceipt(rec) {
+						if i == 0 {
+							if !exists || receiptspec.VerifyAdvisorRecordAtAnchor(receiptspec.Anchor{Seq: anchorSeq, EntryHash: anchorHash}, rec, record) != nil {
+								return errors.New("advisor record anchor binding invalid")
+							}
+						} else if !exists || receiptspec.VerifyAdvisorRecord(receipts[i-1], rec, record) != nil {
+							return errors.New("advisor record binding invalid")
+						}
+					} else if exists && receiptspec.VerifyRecordBinding(rec, record) != nil {
+						return errors.New("record binding invalid")
+					}
+				}
 			}
 			keys, err = queryAllSignerKeys(ctx, tx)
 			if err != nil {
@@ -174,6 +213,10 @@ func ExportHandler(db *sql.DB, signerStore *signer.Store) http.HandlerFunc {
 		for _, rec := range receipts {
 			line, err := MarshalJSONLReceipt(rec)
 			writeJSONLLine(w, line, err)
+			if record, exists := records[rec.Seq]; exists {
+				line, err := receiptspec.MarshalRecordLine(rec.Seq, record)
+				writeJSONLLine(w, line, err)
+			}
 		}
 	}
 }

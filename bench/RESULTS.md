@@ -371,6 +371,8 @@ Until then, no moderate-load production p99 pass is claimed.
 
 # Historical Phase 0: in-process act overhead
 
+For Phase 3 measurements, see [Advisor](#advisor).
+
 **Verdict: FAIL overall. The `<1 ms p99` exit gate is not met across the tested load levels.**
 
 Only the original concurrency-1 run with a 0 ms upstream passes.
@@ -735,3 +737,187 @@ Build, both vet commands, race tests, and tagged helper tests were rerun after t
 The existing closed-loop 64-request smoke matrix was rerun and passed.
 The full closed-loop table and CPU profile remain the original measurements, not new reruns.
 No `.cache/` files belong in the commit.
+
+## Advisor
+
+**Status: OFF by default. Model evaluation is pending.**
+
+Measured on 2026-10-18, on Apple M4 with 10 CPUs and 16 GiB.
+Python was 3.14.6. Go was 1.26.0 on darwin/arm64.
+Gateway benchmarks used `GOMAXPROCS=4`.
+The advisor service used Python's standard library with no runtime dependencies.
+
+### Dataset and method
+
+The 60 labeled cases are synthetic. No real receipt logs exist yet.
+There are 33 escalation labels and 27 non-escalation labels.
+Labels were authored for this implementation, not sampled from held-out production traffic.
+Every state now uses the gateway's exact `service`, `action`, and `params` shape.
+Payload task claims were removed. The heuristic ignores them instead of increasing confidence.
+
+Each configuration runs 60 warmup requests, then 1,200 measured loopback HTTP requests.
+Classification counts use each label once during warmup.
+Percentiles use nearest-rank selection.
+HTTP latency includes connection setup, HTTP framing, service work, response transfer, and client reads.
+Payload serialization and response JSON decoding are outside this interval.
+Gateway authorization, upstream calls, and receipt commits are also excluded.
+Tier latency measures backend execution only.
+
+Reproduction:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20
+```
+
+### Escalation results
+
+| Configuration | Precision | Recall | TP | FP | TN | FN |
+| --- | --- | --- | --- | --- | --- | --- |
+| Heuristic A | 55.00% | 100% | 33 | 27 | 0 | 0 |
+| Heuristic A+B test cascade | 55.00% | 100% | 33 | 27 | 0 | 0 |
+| Test B, all 60 cases | 55.00% | 100% | 33 | 27 | 0 | 0 |
+
+Test B repeats the same heuristic on all 60 low-confidence cases.
+There is no separate task signal in the gateway state.
+The heuristic reports unknown consistency and confidence below the default 0.8 threshold.
+Consequently, every request requires approval.
+All 27 non-escalation labels become false positives.
+The 100% recall comes from conservative approval, not semantic understanding.
+These results supersede the initial 90.91% figures.
+This is not a Lux, Vega, or GPU result.
+
+Do not use these numbers as a production safety claim.
+
+### Latency
+
+| Configuration | Measured calls | HTTP p50 | HTTP p99 |
+| --- | --- | --- | --- |
+| Heuristic A | 1,200 | 0.186375 ms | 0.390833 ms |
+| Heuristic A+B test cascade | 1,200 | 0.172042 ms | 0.379917 ms |
+
+| Backend position | Measured calls | Backend p50 | Backend p99 |
+| --- | --- | --- | --- |
+| A alone | 1,200 | 0.004 ms | 0.006 ms |
+| A within cascade | 1,200 | 0.004 ms | 0.005 ms |
+| B within cascade | 1,200 | 0.002 ms | 0.003 ms |
+
+The B count is 60 cases repeated 20 times.
+One measured run per configuration is reported.
+There are no repeated-run confidence intervals.
+These are heuristic timings, not neural-model latency claims.
+
+### Disabled gateway before and after, initial implementation
+
+These gateway measurements belong to the initial implementation, `bbb46ae`.
+They were not rerun for this review.
+The advisor harness above was rerun after the review fixes.
+
+The existing disk-backed gateway benchmark was run at baseline `494e81be984c53d77c6b8181dbad7304a695f8a3`.
+The changed gateway used an unset advisor URL.
+Both runs used the same benchmark, concurrency 1, and a 0 ms upstream.
+Each run measured 5,000 requests after the benchmark's warmup.
+Runs alternated baseline, changed, baseline, changed, baseline, changed.
+
+```sh
+mkdir -p .cache/tmp .cache/go-tmp .cache/go-build .cache/baseline
+git archive 494e81b | tar -x -C .cache/baseline
+export TMPDIR="$PWD/.cache/tmp" GOTMPDIR="$PWD/.cache/go-tmp"
+export GOCACHE="$PWD/.cache/go-build" GOMAXPROCS=4
+go test -C .cache/baseline -tags=bench ./bench -run '^$' \
+  -bench '^BenchmarkHandleActE2E/delay=0s/c=1$' -benchtime=5000x -count=1
+go test -tags=bench ./bench -run '^$' \
+  -bench '^BenchmarkHandleActE2E/delay=0s/c=1$' -benchtime=5000x -count=1
+```
+
+| Run | Baseline p50 overhead | Changed p50 overhead | Baseline p99 overhead | Changed p99 overhead |
+| --- | --- | --- | --- | --- |
+| 1 | 423.8 us | 356.1 us | 6,208 us | 13,832 us |
+| 2 | 413.3 us | 452.6 us | 9,861 us | 11,146 us |
+| 3 | 449.8 us | 461.8 us | 15,466 us | 14,601 us |
+| Median | 423.8 us | 452.6 us | 9,861 us | 13,832 us |
+
+Median throughput was 479.9 requests/s before and 460.4 requests/s after.
+The shared host and SQLite filesystem showed large tail variation.
+Median p99 increased in this sample. These runs do not establish unchanged hot-path performance.
+They also do not isolate the advisor branch's cost.
+No latency exit gate is claimed.
+Disabled-path tests separately check unchanged receipt preimages and zero advisor calls.
+
+### Pending model runs
+
+Neither inspected Kai nor Laya revision listed an ONNX artifact.
+Local `onnxruntime` was absent.
+Kai's listed weights total 1,507,642,792 bytes, above the 1.5 GB limit.
+Laya's root safetensors file fits the limit but has no verified ONNX runtime contract.
+No weights were downloaded.
+
+The published vllm-sr 0.4.0 wheel did not establish a Decision 2.0 inference API.
+The `onnx` and `vllm-sr` adapters raise `NotImplementedError`, rather than invent calls.
+Kai versus Laya selection, Lux evaluation, and GPU cascade wiring remain pending.
+See [RUNTIME.md](../services/decision-advisor/RUNTIME.md) for artifact hashes and pinned model revisions.
+The advisor remains off regardless of these synthetic numbers.
+
+### Evidence and validation
+
+Each action receipt retains `params_sha256 = DigestParams(params)`.
+An adjacent `advisor` / `decision:advise` companion binds the separate evidence record through `HashRecord`.
+Its agent identity is the reserved `agentgate:advisor`.
+Matching names with ordinary agent IDs remain ordinary receipts.
+API requests using reserved names return 400 without writing receipts.
+Both receipts and the record commit in one ledger transaction.
+The companion's signed chain link and record identify the preceding action.
+Default JSONL exports remain frozen v1, without record lines.
+Add `&records=1` to opt into evidence records beside their companions.
+Both JSONL and SQLite verification check the record binding and action link.
+Without supplied records, verification instead checks the chain and reports the unchecked companion count.
+Use `--require-advisor-records` to reject missing evidence.
+Any supplied record lines also enable mandatory evidence verification.
+Leading companions use the signed manifest anchor when records are included.
+Escalations use existing `deny` and valid `advisor_escalated` error codes.
+Rejected or truncated input requires approval and records `advisor_input_rejected`.
+It cannot use the default unavailable allow fallback.
+The frozen receipt rules and version-lock test are unchanged.
+Bundle parsing and verification gained additive record support.
+V1 still cannot prove that every risky action has a companion.
+See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unavailable-evidence limits.
+
+| Command or check | Result |
+| --- | --- |
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `CGO_ENABLED=1 go test -race ./...` | PASS |
+| `go test ./pkg/receiptspec -run '^TestV1VersionLock$' -count=1` | PASS, test unchanged |
+| `semgrep --config auto --error --quiet ./internal ./cmd ./pkg ./services` | PASS |
+| `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s services/decision-advisor -q` | PASS, 12 tests |
+| `PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20` | PASS, 60 labels and 2,400 measured requests |
+| `git diff 6e8422f --exit-code -- pkg/receiptspec/vectors_test.go` | PASS |
+| Default export comparison against main `494e81b`, on the same ledger | PASS, byte-identical across 4 ranges |
+| Main `494e81b` verifier against the new default export | PASS |
+| Updated verifier against an opt-in export beginning with a companion | PASS |
+| Updated verifier against the default export | PASS, with unchecked-companion note |
+| Default export with `--require-advisor-records` | FAIL as expected, missing evidence |
+
+Regression tests failed before the fixes.
+They reproduced changed gateway digests, size bypass, 4xx allow fallback, and task-confidence spoofing.
+Companion tests cover atomic rollback, export round trips, and altered or missing records.
+Re-review tests first reproduced spoofed identities, poisoned historical names, leading-range rejection, and incompatible default exports.
+They pass after reserving the producer identity and making records opt-in.
+Final regression tests reproduced the updated verifier rejecting default exports.
+Chain-only mode now passes and reports unchecked companions in text and JSON.
+Strict mode and record-bearing bundles still enforce evidence presence.
+The v1 specification gained only an informative extension cross-reference in section 7.
+Resealed record hashes cannot bypass action sequence, entry hash, or params digest checks.
+The existing deployment fragments were not changed or rerendered in this review.
+Docker image construction was not run. No container runtime result is claimed.
+
+Semgrep used its public auto profile without an application token.
+Its auto profile requires automatic registry metrics; disabling metrics prevents that profile from loading.
+No repository source was uploaded.
+
+SHA-256 identifiers:
+
+| File | SHA-256 |
+| --- | --- |
+| `bench/advisor/cases.jsonl` | `af1165889d7faf34563f7f3bd7a79afb2b05c3804928b0176279153e221adc0c` |
+| `services/decision-advisor/backends.py` | `b947297a57caaa23ce2ce60f270dd2cf0e8fdd1a51207aba78852a60cb65fb22` |
+| Unchanged `pkg/receiptspec/vectors_test.go` | `fbfcc8411ec707244c4fdd9e05922f5b31c12e9d92ff70e681198efcdfc846d5` |

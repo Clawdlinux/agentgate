@@ -365,6 +365,52 @@ Set `AGENTGATE_VAULT_CACHE_TTL=0` to disable plaintext caching. Refresh sharing 
 
 ## Configuration
 
+### Optional local decision advisor
+
+The advisor is off by default. Leave `AGENTGATE_ADVISOR_URL` unset.
+It checks only registry actions marked `risky: true`.
+Deterministic authorization runs first. Advisor checks happen before vault access and upstream dispatch.
+An advisor can require approval or deny an allowed request.
+It cannot turn a deterministic denial into an allow.
+All tiers share a 150 ms end-to-end call deadline.
+
+Receipt v1 remains unchanged.
+Escalations use `deny` plus `advisor_escalated`.
+Every action receipt keeps its original params digest.
+An immediately following `advisor` / `decision:advise` receipt binds the evidence record.
+It uses the reserved producer ID `agentgate:advisor`, never an authenticated API key.
+Both receipts and the record commit in the same transaction.
+See the [binding proposal](docs/spec/proposals/advisor-evidence.md) for verification and unavailable behavior.
+Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` returns the record.
+Default JSONL exports remain byte-compatible with frozen v1 and released v0.1.x verifiers.
+Add `&records=1` to the export URL to include separate evidence records.
+The offline verifier checks record binding and the link to the preceding action receipt.
+Without records, this branch's verifier checks the chain and reports unchecked advisor companions.
+Text output includes a note, including under `--quiet`.
+JSON output includes `unchecked_advisor_records` when nonzero.
+Use `--require-advisor-records` when advisor evidence must be present.
+Any supplied records also enable mandatory advisor evidence checks.
+Request `&records=1` or use the SQLite source for that evidence.
+Keep the extension away from older verifiers.
+Record-enabled ranges can start at a companion, using their signed manifest anchor.
+Receipt v1 cannot prove that every risky action has a companion.
+
+Service `advisor` and actions beginning `decision:` are reserved.
+These requests return 400 without a receipt. Registry loading also rejects the reserved service.
+The reservations apply even when the advisor is off.
+Older history with these names and ordinary agent IDs still verifies.
+
+Advisor params have a 256 KiB budget and use JSON without HTML expansion.
+Truncated or rejected input requires approval, regardless of `allow_with_flag`.
+The original params still go upstream unchanged after deterministic authorization and advisory approval.
+Only timeouts, connection failures, and service 5xx qualify for the unavailable allow fallback.
+
+The [service](services/decision-advisor/README.md) ships a deterministic heuristic for tests.
+Model adapters remain blocked until their upstream inference API is verified.
+The [Advisor results](bench/RESULTS.md#advisor) use 60 synthetic cases, not real receipt logs.
+These numbers do not enable the advisor or establish model quality.
+State and task claims are untrusted. Prompt injection cannot grant authority.
+
 ### Environment Variables
 
 | Variable | Description | Required |
@@ -374,6 +420,11 @@ Set `AGENTGATE_VAULT_CACHE_TTL=0` to disable plaintext caching. Refresh sharing 
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
 | `AGENTGATE_PUBLIC_URL` | Public base URL for OAuth callbacks and admin cookie security. Default `http://localhost:8080`. | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
+| `AGENTGATE_ADVISOR_URL` | Unset disables the advisor. Accepts loopback or `.svc.cluster.local` service origins only. | No |
+| `AGENTGATE_ADVISOR_UNAVAILABLE` | `allow_with_flag` by default. Also accepts `require_approval` or `deny`. | No |
+| `AGENTGATE_ADVISOR_APPROVAL_THRESHOLD` | Escalation probability threshold. Default `0.6`. | No |
+| `AGENTGATE_ADVISOR_DENY_THRESHOLD` | Denial probability threshold. Default `0.9`. Must exceed the approval threshold. | No |
+| `AGENTGATE_ADVISOR_CONFIDENCE_THRESHOLD` | Require approval when final confidence is lower. Default `0.8`. | No |
 | `AGENTGATE_RATE_KEY_RPS` | Requests per second per API key ID. Default `20`. Zero requires tenant admission disabled. | No |
 | `AGENTGATE_RATE_KEY_BURST` | Per-key token bucket burst. Default `40`. Zero requires tenant admission disabled. | No |
 | `AGENTGATE_RATE_TENANT_RPS` | Requests per second per tenant. Default `100`; `0` disables this bucket. | No |
@@ -469,6 +520,11 @@ OAuth callbacks validate encrypted state without an admin session, so they don't
 ### Service Configs
 
 Service configurations are YAML files in `configs/services/`. See `configs/services/google_workspace.yaml` for an example. The gateway itself loads the merged `configs/services.yaml`.
+
+Each action accepts `risky: true` or `risky: false`.
+Omission defaults to false. Non-boolean values stop registry loading.
+Mark writes, deletes, payments, outbound email, and bulk exports as risky.
+The marker has no enforcement effect while the advisor is disabled.
 
 ### Upstream connections and retries
 

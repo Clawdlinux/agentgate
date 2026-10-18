@@ -1,0 +1,2 @@
+# The heuristic service uses only Python's standard library.
+# No model runtime is installed until its decision inference API is verified.
