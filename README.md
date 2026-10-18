@@ -369,7 +369,7 @@ Set `AGENTGATE_VAULT_CACHE_TTL=0` to disable plaintext caching. Refresh sharing 
 | `AGENTGATE_VAULT_KEY` | 32-byte vault key. Also derives receipt encryption keys and the API-key HMAC pepper. | Yes |
 | `AGENTGATE_VAULT_CACHE_TTL` | Decrypted-token cache duration. Default `60s`; `0` disables caching. Negative or invalid durations stop startup. | No |
 | `AGENTGATE_ADMIN_SECRET` | Secret for admin API access | Yes |
-| `AGENTGATE_PUBLIC_URL` | Base URL used to build the OAuth callback (default `http://localhost:8080`) | No |
+| `AGENTGATE_PUBLIC_URL` | Public base URL for OAuth callbacks and admin cookie security. Default `http://localhost:8080`. | No |
 | `AGENTGATE_API_KEY_CACHE_TTL` | Verified-key cache duration. Default `30s`; `0` disables caching. | No |
 | `AGENTGATE_RATE_KEY_RPS` | Requests per second per API key ID. Default `20`. Zero requires tenant admission disabled. | No |
 | `AGENTGATE_RATE_KEY_BURST` | Per-key token bucket burst. Default `40`. Zero requires tenant admission disabled. | No |
@@ -452,6 +452,16 @@ Errors contain fixed reasons, not token contents.
 The early rate limiter runs before these checks. Structural caps then bound fact joins and block processing.
 Biscuit-go v2.2.0 deadlines do not cover check evaluation and cannot reliably stop timed-out goroutines.
 Runtime limits alone do not bound per-request CPU.
+
+### Admin Session Cookies
+
+Set `AGENTGATE_PUBLIC_URL` to your HTTPS address behind a TLS-terminating proxy.
+Admin cookies default to `Secure`, `HttpOnly`, and `SameSite=Strict`, with a 1-hour lifetime and `Path=/`.
+Only explicit HTTP URLs on `localhost` or `127.0.0.1` disable `Secure` for local development.
+Direct TLS requests always set `Secure`, including when the public URL uses local HTTP.
+Forwarded headers cannot downgrade cookie security.
+Logout clears the cookie with the same security attributes.
+OAuth callbacks validate encrypted state without an admin session, so they don't need `SameSite=Lax`.
 
 ### Service Configs
 

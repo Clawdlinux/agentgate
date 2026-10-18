@@ -65,6 +65,68 @@ func TestHandlerLoginSetsSessionCookie(t *testing.T) {
 	}
 }
 
+func TestHandlerSessionCookieSecurity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name           string
+		publicURL      string
+		requestURL     string
+		forwardedProto string
+		wantSecure     bool
+	}{
+		{name: "https proxy", publicURL: "https://agentgate.example", requestURL: "http://agentgate.example", wantSecure: true},
+		{name: "localhost development", publicURL: "http://localhost:8080", requestURL: "http://localhost:8080"},
+		{name: "loopback development", publicURL: "http://127.0.0.1:8080", requestURL: "http://127.0.0.1:8080"},
+		{name: "direct tls", publicURL: "http://localhost:8080", requestURL: "https://localhost:8080", wantSecure: true},
+		{name: "remote http", publicURL: "http://agentgate.example", requestURL: "http://agentgate.example", wantSecure: true},
+		{name: "missing public url", requestURL: "http://agentgate.example", wantSecure: true},
+		{name: "forwarded http cannot downgrade", publicURL: "https://agentgate.example", requestURL: "http://agentgate.example", forwardedProto: "http", wantSecure: true},
+		{name: "forwarded https is not trusted", publicURL: "http://localhost:8080", requestURL: "http://localhost:8080", forwardedProto: "https"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, _ := testHandler(t)
+			handler.sessions = NewSessionManager([]byte("dev-key-change-in-production-32b"), test.publicURL)
+			form := url.Values{"email": {"admin@example.com"}, "password": {"correct horse battery staple"}}
+			request := httptest.NewRequest(http.MethodPost, test.requestURL+"/admin/login", bytes.NewBufferString(form.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("X-Forwarded-Proto", test.forwardedProto)
+			response := httptest.NewRecorder()
+			handler.Login(response, request)
+			if response.Code != http.StatusSeeOther {
+				t.Fatalf("Login status = %d, want %d", response.Code, http.StatusSeeOther)
+			}
+			loginCookies := response.Result().Cookies()
+			if len(loginCookies) != 1 {
+				t.Fatalf("Login returned %d cookies, want 1", len(loginCookies))
+			}
+
+			logoutRequest := httptest.NewRequest(http.MethodPost, test.requestURL+"/admin/logout", nil)
+			logoutRequest.Header.Set("X-Forwarded-Proto", test.forwardedProto)
+			logoutRequest.Header.Set(csrfHeaderName, csrfHeaderValue)
+			logoutRequest.AddCookie(loginCookies[0])
+			logoutResponse := httptest.NewRecorder()
+			handler.RequireAdmin(http.HandlerFunc(handler.Logout)).ServeHTTP(logoutResponse, logoutRequest)
+			if logoutResponse.Code != http.StatusSeeOther {
+				t.Fatalf("Logout status = %d, want %d", logoutResponse.Code, http.StatusSeeOther)
+			}
+			logoutCookies := logoutResponse.Result().Cookies()
+			if len(logoutCookies) != 1 || logoutCookies[0].MaxAge != -1 {
+				t.Fatalf("Logout cookies = %#v", logoutCookies)
+			}
+			for _, cookie := range []*http.Cookie{loginCookies[0], logoutCookies[0]} {
+				if cookie.Secure != test.wantSecure || !cookie.HttpOnly ||
+					cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
+					t.Fatalf("cookie has incorrect attributes: %#v", cookie)
+				}
+			}
+			if loginCookies[0].MaxAge != int(sessionTTL.Seconds()) || loginCookies[0].Expires.IsZero() {
+				t.Fatalf("Login cookie has incorrect lifetime: %#v", loginCookies[0])
+			}
+		})
+	}
+}
+
 func TestHandlerRequireAdmin(t *testing.T) {
 	t.Parallel()
 	handler, identity := testHandler(t)

@@ -118,12 +118,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed", http.StatusInternalServerError)
 		return
 	}
+	cookie.Secure = cookie.Secure || r.TLS != nil
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, h.sessions.ClearCookie())
+	cookie := h.sessions.ClearCookie()
+	cookie.Secure = cookie.Secure || r.TLS != nil
+	http.SetCookie(w, cookie)
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
