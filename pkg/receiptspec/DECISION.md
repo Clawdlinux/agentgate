@@ -88,9 +88,16 @@ It adds `{"type":"record","seq":42,"record":{...}}` after the corresponding rece
 This line type is outside the [frozen default format](../../docs/spec/RECEIPT-v1.md#7-jsonl-encoding).
 Receipt lines and manifest encoding stay unchanged.
 `Bundle.Records` holds these separate objects.
-`VerifyBundle` rejects missing advisor records, altered bindings, and orphaned records.
-Use the opt-in export or SQLite source for updated advisor evidence verification.
-The default export provides the original chain-verification format, not complete advisor evidence.
+Without record lines, `VerifyBundle` verifies the chain and counts unchecked companions in `UncheckedAdvisorRecords`.
+The CLI prints that count as a note, even under `--quiet`.
+JSON output exposes `unchecked_advisor_records` when nonzero.
+`Bundle.RequireAdvisorRecords` or CLI `--require-advisor-records` requires evidence even when no records were supplied.
+Any supplied record lines also require records for every advisor companion in the bundle.
+Those modes reject missing advisor records, altered bindings, and orphaned records.
+Use the opt-in export or SQLite source to supply evidence.
+The default export provides chain verification, not complete advisor evidence.
+If every record line is stripped, default verification reports unchecked companions instead of asserting evidence verification.
+Require records explicitly for evidence-critical audits.
 Do not send the extension to older readers.
 
 A record-enabled range can begin with a companion.
@@ -99,7 +106,7 @@ The record's action sequence and entry hash must match the signed anchor sequenc
 The record still must match the companion's params digest and policy outcome.
 The anchor does not expose the preceding action's params digest.
 Include the action receipt to compare that digest independently.
-A leading companion without a signed manifest fails verification.
+A leading companion without a signed manifest still fails chain verification.
 V1 cannot prove that every risky gateway action has an advisor companion.
 
 Go structs, maps, and `json.RawMessage` that carry the same content hash the

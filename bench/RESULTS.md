@@ -869,6 +869,9 @@ The companion's signed chain link and record identify the preceding action.
 Default JSONL exports remain frozen v1, without record lines.
 Add `&records=1` to opt into evidence records beside their companions.
 Both JSONL and SQLite verification check the record binding and action link.
+Without supplied records, verification instead checks the chain and reports the unchecked companion count.
+Use `--require-advisor-records` to reject missing evidence.
+Any supplied record lines also enable mandatory evidence verification.
 Leading companions use the signed manifest anchor when records are included.
 Escalations use existing `deny` and valid `advisor_escalated` error codes.
 Rejected or truncated input requires approval and records `advisor_input_rejected`.
@@ -891,12 +894,17 @@ See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unava
 | Default export comparison against main `494e81b`, on the same ledger | PASS, byte-identical across 4 ranges |
 | Main `494e81b` verifier against the new default export | PASS |
 | Updated verifier against an opt-in export beginning with a companion | PASS |
+| Updated verifier against the default export | PASS, with unchecked-companion note |
+| Default export with `--require-advisor-records` | FAIL as expected, missing evidence |
 
 Regression tests failed before the fixes.
 They reproduced changed gateway digests, size bypass, 4xx allow fallback, and task-confidence spoofing.
 Companion tests cover atomic rollback, export round trips, and altered or missing records.
 Re-review tests first reproduced spoofed identities, poisoned historical names, leading-range rejection, and incompatible default exports.
 They pass after reserving the producer identity and making records opt-in.
+Final regression tests reproduced the updated verifier rejecting default exports.
+Chain-only mode now passes and reports unchecked companions in text and JSON.
+Strict mode and record-bearing bundles still enforce evidence presence.
 The v1 specification gained only an informative extension cross-reference in section 7.
 Resealed record hashes cannot bypass action sequence, entry hash, or params digest checks.
 The existing deployment fragments were not changed or rerendered in this review.

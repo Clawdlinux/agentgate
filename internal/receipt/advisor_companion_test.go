@@ -53,6 +53,7 @@ func TestAdvisorCompanionPreservesActionAndExports(t *testing.T) {
 			t.Fatalf("accepted tampering: %+v %v", result, err)
 		}
 		delete(bundle.Records, companion.Seq)
+		bundle.RequireAdvisorRecords = true
 		result, err = receiptspec.VerifyBundle(bundle, nil, nil)
 		if err != nil || result.OK {
 			t.Fatal("accepted missing companion record")

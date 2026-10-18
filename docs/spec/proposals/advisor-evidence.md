@@ -114,7 +114,12 @@ This extension adds a typed record line immediately after each companion receipt
 The manifest counts receipts, not record lines.
 The extension is outside the frozen default JSONL format.
 Updated readers accept both existing bundles and the additive record lines.
-Updated advisor evidence verification needs this opt-in export or the SQLite source.
+Without records, updated verification checks the chain and reports `UncheckedAdvisorRecords`.
+The CLI shows a note, including under `--quiet`.
+JSON output includes `unchecked_advisor_records` when nonzero.
+Use `--require-advisor-records` to reject missing evidence even when no record lines remain.
+Any supplied records also enable mandatory companion-record checks.
+Supply evidence through this opt-in export or the SQLite source.
 Older readers reject the extension. Do not send it to them.
 No evidence is hidden inside frozen receipt fields.
 
@@ -125,7 +130,8 @@ The offline JSONL and SQLite verifier checks:
 3. The record's action sequence, entry hash, and params digest against the preceding receipt.
 4. Companion adjacency and its coarse outcome mapping.
 
-Missing, duplicate, orphaned, or tampered records fail advisor evidence verification.
+With records or strict mode enabled, missing, duplicate, orphaned, or tampered records fail advisor evidence verification.
+Chain-only success does not claim that advisor evidence was checked.
 A record-enabled range can start with a companion.
 Its manifest must pass signature verification first.
 The companion's `prev_hash` must equal the signed anchor hash.

@@ -148,6 +148,8 @@ type Bundle struct {
 	Keys     []TrustedKey
 	Manifest *ExportManifest
 	Records  map[uint64]json.RawMessage
+	// RequireAdvisorRecords disables chain-only fallback when no record lines were supplied.
+	RequireAdvisorRecords bool
 }
 
 // ReadJSONL parses every non-empty line of r. "key" lines go to Keys, a

@@ -99,6 +99,15 @@ func TestDefaultExportRemainsFrozenV1(t *testing.T) {
 	if err != nil || !result.OK {
 		t.Fatalf("legacy chain verification failed: %+v %v", result, err)
 	}
+	result, err = receiptspec.VerifyBundle(bundle, nil, nil)
+	if err != nil || !result.OK || result.UncheckedAdvisorRecords != 1 {
+		t.Fatalf("default export failed bundle verification: %+v %v", result, err)
+	}
+	bundle.RequireAdvisorRecords = true
+	result, err = receiptspec.VerifyBundle(bundle, nil, nil)
+	if err != nil || result.OK {
+		t.Fatalf("strict verification accepted missing records: %+v %v", result, err)
+	}
 }
 
 func TestLegacyAdvisorNamesRemainOrdinary(t *testing.T) {

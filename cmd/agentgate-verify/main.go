@@ -49,12 +49,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agentgate-verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		source       string
-		path         string
-		trustRoot    string
-		expectedHead string
-		outputFormat string
-		quiet        bool
+		source                string
+		path                  string
+		trustRoot             string
+		expectedHead          string
+		outputFormat          string
+		quiet                 bool
+		requireAdvisorRecords bool
 	)
 	fs.StringVar(&source, "source", "", "receipt source: sqlite | jsonl")
 	fs.StringVar(&path, "path", "", "input path; '-' means stdin (jsonl source only)")
@@ -63,6 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&outputFormat, "format", "text", "output format: text | json")
 	fs.BoolVar(&quiet, "quiet", false, "suppress successful verification details in text output")
 	fs.BoolVar(&quiet, "q", false, "suppress successful verification details in text output")
+	fs.BoolVar(&requireAdvisorRecords, "require-advisor-records", false, "require evidence records for every advisor companion, including chain-only exports")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -123,6 +125,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	manifest := bundle.Manifest
+	bundle.RequireAdvisorRecords = requireAdvisorRecords
 
 	result, err := receiptspec.VerifyBundle(bundle, explicitTrust, explicitExpected)
 	var manifestErr *receiptspec.ManifestError
@@ -150,6 +153,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "PASS: %d receipts verified, head seq=%d hash=%x\n",
 			result.VerifiedCount, result.HeadSeq, result.HeadEntryHash[:8])
+		if result.UncheckedAdvisorRecords > 0 {
+			fmt.Fprintf(stdout, "note: %d advisor companion(s) unchecked; use --require-advisor-records to require evidence\n", result.UncheckedAdvisorRecords)
+		}
 		if quiet {
 			return 0
 		}
@@ -182,27 +188,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 type jsonResult struct {
-	OK            bool   `json:"ok"`
-	TotalReceipts int    `json:"total_receipts"`
-	VerifiedCount int    `json:"verified_count"`
-	FailedAtSeq   uint64 `json:"failed_at_seq,omitempty"`
-	Reason        string `json:"reason,omitempty"`
-	HeadSeq       uint64 `json:"head_seq,omitempty"`
-	HeadEntryHash string `json:"head_entry_hash,omitempty"`
-	Complete      bool   `json:"complete"`
-	Range         string `json:"range,omitempty"`
+	OK                      bool   `json:"ok"`
+	UncheckedAdvisorRecords int    `json:"unchecked_advisor_records,omitempty"`
+	TotalReceipts           int    `json:"total_receipts"`
+	VerifiedCount           int    `json:"verified_count"`
+	FailedAtSeq             uint64 `json:"failed_at_seq,omitempty"`
+	Reason                  string `json:"reason,omitempty"`
+	HeadSeq                 uint64 `json:"head_seq,omitempty"`
+	HeadEntryHash           string `json:"head_entry_hash,omitempty"`
+	Complete                bool   `json:"complete"`
+	Range                   string `json:"range,omitempty"`
 }
 
 func writeJSONResult(stdout io.Writer, result receiptspec.VerifyResult, rangeKind string) {
 	output := jsonResult{
-		OK:            result.OK,
-		TotalReceipts: result.TotalReceipts,
-		VerifiedCount: result.VerifiedCount,
-		FailedAtSeq:   result.FailedAtSeq,
-		Reason:        result.Reason,
-		HeadSeq:       result.HeadSeq,
-		Complete:      result.Complete,
-		Range:         rangeKind,
+		OK:                      result.OK,
+		UncheckedAdvisorRecords: result.UncheckedAdvisorRecords,
+		TotalReceipts:           result.TotalReceipts,
+		VerifiedCount:           result.VerifiedCount,
+		FailedAtSeq:             result.FailedAtSeq,
+		Reason:                  result.Reason,
+		HeadSeq:                 result.HeadSeq,
+		Complete:                result.Complete,
+		Range:                   rangeKind,
 	}
 	if result.OK {
 		output.HeadEntryHash = fmt.Sprintf("%x", result.HeadEntryHash)

@@ -385,7 +385,12 @@ Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` returns the reco
 Default JSONL exports remain byte-compatible with frozen v1 and released v0.1.x verifiers.
 Add `&records=1` to the export URL to include separate evidence records.
 The offline verifier checks record binding and the link to the preceding action receipt.
-Updated advisor verification needs the opt-in records or the SQLite source.
+Without records, this branch's verifier checks the chain and reports unchecked advisor companions.
+Text output includes a note, including under `--quiet`.
+JSON output includes `unchecked_advisor_records` when nonzero.
+Use `--require-advisor-records` when advisor evidence must be present.
+Any supplied records also enable mandatory advisor evidence checks.
+Request `&records=1` or use the SQLite source for that evidence.
 Keep the extension away from older verifiers.
 Record-enabled ranges can start at a companion, using their signed manifest anchor.
 Receipt v1 cannot prove that every risky action has a companion.
