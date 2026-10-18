@@ -752,13 +752,15 @@ The advisor service used Python's standard library with no runtime dependencies.
 The 60 labeled cases are synthetic. No real receipt logs exist yet.
 There are 33 escalation labels and 27 non-escalation labels.
 Labels were authored for this implementation, not sampled from held-out production traffic.
-Known heuristic errors remain in the dataset.
+Every state now uses the gateway's exact `service`, `action`, and `params` shape.
+Payload task claims were removed. The heuristic ignores them instead of increasing confidence.
 
 Each configuration runs 60 warmup requests, then 1,200 measured loopback HTTP requests.
 Classification counts use each label once during warmup.
 Percentiles use nearest-rank selection.
-HTTP latency includes client encoding, connection setup, service work, response transfer, and client reads.
-It excludes gateway authorization, upstream calls, and receipt commits.
+HTTP latency includes connection setup, HTTP framing, service work, response transfer, and client reads.
+Payload serialization and response JSON decoding are outside this interval.
+Gateway authorization, upstream calls, and receipt commits are also excluded.
 Tier latency measures backend execution only.
 
 Reproduction:
@@ -771,41 +773,44 @@ PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20
 
 | Configuration | Precision | Recall | TP | FP | TN | FN |
 | --- | --- | --- | --- | --- | --- | --- |
-| Heuristic A | 90.91% | 90.91% | 30 | 3 | 24 | 3 |
-| Heuristic A+B test cascade | 90.91% | 90.91% | 30 | 3 | 24 | 3 |
-| Test B, selected subset only | 100% | 100% | 4 | 0 | 0 | 0 |
+| Heuristic A | 55.00% | 100% | 33 | 27 | 0 | 0 |
+| Heuristic A+B test cascade | 55.00% | 100% | 33 | 27 | 0 | 0 |
+| Test B, all 60 cases | 55.00% | 100% | 33 | 27 | 0 | 0 |
 
-Test B repeats the same heuristic on 4 low-confidence cases.
-Its classification denominator is only those 4 cases.
-It has no negative examples and measures no independent model quality.
+Test B repeats the same heuristic on all 60 low-confidence cases.
+There is no separate task signal in the gateway state.
+The heuristic reports unknown consistency and confidence below the default 0.8 threshold.
+Consequently, every request requires approval.
+All 27 non-escalation labels become false positives.
+The 100% recall comes from conservative approval, not semantic understanding.
+These results supersede the initial 90.91% figures.
 This is not a Lux, Vega, or GPU result.
 
-False positives: `edge-safe-25`, `edge-safe-26`, and `edge-safe-27`.
-They cover an owned reminder, an empty draft, and a preapproved small charge.
-False negatives: `edge-risk-31`, `edge-risk-32`, and `edge-risk-33`.
-They cover an outbound webhook, a workflow script, and an indirect read-only task claim.
-The heuristic misses semantic risk and overreacts to action-name keywords.
 Do not use these numbers as a production safety claim.
 
 ### Latency
 
 | Configuration | Measured calls | HTTP p50 | HTTP p99 |
 | --- | --- | --- | --- |
-| Heuristic A | 1,200 | 0.209166 ms | 0.538958 ms |
-| Heuristic A+B test cascade | 1,200 | 0.207791 ms | 0.607667 ms |
+| Heuristic A | 1,200 | 0.186375 ms | 0.390833 ms |
+| Heuristic A+B test cascade | 1,200 | 0.172042 ms | 0.379917 ms |
 
 | Backend position | Measured calls | Backend p50 | Backend p99 |
 | --- | --- | --- | --- |
-| A alone | 1,200 | 0.005 ms | 0.020 ms |
-| A within cascade | 1,200 | 0.005 ms | 0.022 ms |
-| B within cascade | 80 | 0.003 ms | 0.036 ms |
+| A alone | 1,200 | 0.004 ms | 0.006 ms |
+| A within cascade | 1,200 | 0.004 ms | 0.005 ms |
+| B within cascade | 1,200 | 0.002 ms | 0.003 ms |
 
-The B count is 4 cases repeated 20 times.
+The B count is 60 cases repeated 20 times.
 One measured run per configuration is reported.
 There are no repeated-run confidence intervals.
 These are heuristic timings, not neural-model latency claims.
 
-### Disabled gateway before and after
+### Disabled gateway before and after, initial implementation
+
+These gateway measurements belong to the initial implementation, `bbb46ae`.
+They were not rerun for this review.
+The advisor harness above was rerun after the review fixes.
 
 The existing disk-backed gateway benchmark was run at baseline `494e81be984c53d77c6b8181dbad7304a695f8a3`.
 The changed gateway used an unset advisor URL.
@@ -854,11 +859,18 @@ The advisor remains off regardless of these synthetic numbers.
 
 ### Evidence and validation
 
-Full evidence is stored in `receipt_records`, atomically with its receipt.
-The receipt's existing `params_sha256` binds the canonical record through `VerifyRecordBinding`.
-The record retains the original params digest.
+Each action receipt retains `params_sha256 = DigestParams(params)`.
+An adjacent `advisor` / `decision:advise` companion binds the separate evidence record through `HashRecord`.
+Both receipts and the record commit in one ledger transaction.
+The companion's signed chain link and record identify the preceding action.
+JSONL exports include the record beside its companion.
+Both JSONL and SQLite verification check the record binding and action link.
 Escalations use existing `deny` and valid `advisor_escalated` error codes.
-The frozen receipt specification and `pkg/receiptspec` are unchanged.
+Rejected or truncated input requires approval and records `advisor_input_rejected`.
+It cannot use the default unavailable allow fallback.
+The frozen receipt specification and version-lock test are unchanged.
+Bundle parsing and verification gained additive record support.
+V1 still cannot prove that every risky action has a companion.
 See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unavailable-evidence limits.
 
 | Command or check | Result |
@@ -868,14 +880,15 @@ See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unava
 | `CGO_ENABLED=1 go test -race ./...` | PASS |
 | `go test ./pkg/receiptspec -run '^TestV1VersionLock$' -count=1` | PASS, test unchanged |
 | `semgrep --config auto --error --quiet ./internal ./cmd ./pkg ./services` | PASS |
-| `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s services/decision-advisor -v` | PASS, 10 tests |
+| `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s services/decision-advisor -q` | PASS, 12 tests |
 | `PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20` | PASS, 60 labels and 2,400 measured requests |
-| Go client against the live Python service | PASS, deny escalation and evidence binding |
-| `git diff --exit-code -- pkg/receiptspec docs/spec/RECEIPT-v1.md` | PASS |
-| `helm lint --strict .cache/advisor-chart` | PASS, local wrapper around deployment fragments |
-| `helm lint --strict .cache/advisor-chart --set advisor.enabled=true --set advisor.tierB.enabled=true` | PASS |
+| `git diff bbb46ae --exit-code -- docs/spec/RECEIPT-v1.md pkg/receiptspec/vectors_test.go` | PASS |
 
-The default-off Helm render contained 0 Kubernetes resources.
+Regression tests failed before the fixes.
+They reproduced changed gateway digests, size bypass, 4xx allow fallback, and task-confidence spoofing.
+Companion tests cover atomic rollback, export round trips, and altered or missing records.
+Resealed record hashes cannot bypass action sequence, entry hash, or params digest checks.
+The existing deployment fragments were not changed or rerendered in this review.
 Docker image construction was not run. No container runtime result is claimed.
 
 Semgrep used its public auto profile without an application token.
@@ -886,6 +899,6 @@ SHA-256 identifiers:
 
 | File | SHA-256 |
 | --- | --- |
-| `bench/advisor/cases.jsonl` | `148e90a6219ded03b84ccaadd54a924c4b1169939d2a389b2ff463730b167d75` |
-| `services/decision-advisor/backends.py` | `d57b6a0ca2e9bb9450fce3261070cad3a86ee47c1429e4d0716cd696e18baec3` |
+| `bench/advisor/cases.jsonl` | `af1165889d7faf34563f7f3bd7a79afb2b05c3804928b0176279153e221adc0c` |
+| `services/decision-advisor/backends.py` | `b947297a57caaa23ce2ce60f270dd2cf0e8fdd1a51207aba78852a60cb65fb22` |
 | Unchanged `pkg/receiptspec/vectors_test.go` | `fbfcc8411ec707244c4fdd9e05922f5b31c12e9d92ff70e681198efcdfc846d5` |
