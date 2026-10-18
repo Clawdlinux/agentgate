@@ -9,6 +9,9 @@ Python 3 supervises 3 compiled Go processes:
 
 These processes share host CPUs. `GOMAXPROCS` isn't CPU pinning or a 4-vCPU quota.
 Default process priority remains unchanged. No privileged priority change is needed.
+On macOS, `--foreground` runs `taskpolicy -B -p PID` on the gateway before warmup.
+This clears background policy. It doesn't reserve CPUs.
+The supervisor fails explicitly when that requested policy can't be applied.
 Stop unrelated CPU and disk workloads before measuring.
 Run on a dedicated Linux 4-vCPU gateway host before making deployment claims.
 
@@ -57,6 +60,7 @@ make bench-proc
 make bench-proc BENCH_PROC_ARGS='--label repeat'
 make bench-proc BENCH_PROC_ARGS='--label smoke --n 64'
 make bench-proc BENCH_PROC_ARGS='--label profile --profile --rates 5000 --closed "" --delays 0'
+make bench-proc BENCH_PROC_ARGS='--label foreground --foreground --rates 1000,5000 --closed "" --delays 0'
 ```
 
 Profiles change timing. Don't use profiled requests for the latency gate.
@@ -78,6 +82,16 @@ go tool pprof -top .cache/proc/bin/procgateway PATH/gateway.mutex
 go tool pprof -top -alloc_space .cache/proc/bin/procgateway PATH/gateway.allocs
 go tool trace -d=parsed PATH/gateway.trace
 ```
+
+Save parsed trace output inside `.cache/`, then correlate the slowest 1%:
+
+```sh
+python3 bench/analyze.py PATH/samples.csv --trace PATH/trace.txt
+```
+
+Shares describe those same requests, not sums of unrelated percentiles.
+GC overlap is reported separately because it overlaps the receipt spans.
+Profiled requests also record upstream connection wait and reuse through `httptrace`.
 
 Set `TMPDIR`, `GOTMPDIR`, and `GOCACHE` under `.cache/` before invoking Go tools directly.
 The Makefile already does this for builds.

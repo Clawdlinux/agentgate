@@ -21,9 +21,9 @@ import (
 )
 
 type sample struct {
-	Total, Upstream, Dispatch, Auth, Receipt, Handler int64
-	Reused                                            bool
-	Error                                             string
+	Total, Upstream, Dispatch, Auth, Receipt, Handler, ClientConn int64
+	Reused                                                        bool
+	Error                                                         string
 }
 
 func percentile(values []int64, p float64) float64 {
@@ -74,10 +74,14 @@ func main() {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Bench-ID", strconv.Itoa(id))
 		result := sample{}
+		var start time.Time
 		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
-			GotConn: func(info httptrace.GotConnInfo) { result.Reused = info.Reused },
+			GotConn: func(info httptrace.GotConnInfo) {
+				result.Reused = info.Reused
+				result.ClientConn = time.Since(start).Nanoseconds()
+			},
 		}))
-		start := time.Now()
+		start = time.Now()
 		if scheduled.IsZero() {
 			scheduled = start
 		}
@@ -172,13 +176,14 @@ func main() {
 		log.Fatal(err)
 	}
 	writer := csv.NewWriter(file)
-	writer.Write([]string{"total_ns", "upstream_ns", "dispatch_ns", "auth_ns", "receipt_ns", "handler_ns", "reused", "error"})
+	writer.Write([]string{"total_ns", "upstream_ns", "dispatch_ns", "auth_ns", "receipt_ns", "handler_ns", "client_conn_ns", "reused", "error"})
 	overhead, dispatch := make([]int64, *count), make([]int64, *count)
 	errors, reused := 0, 0
 	for i, s := range samples {
 		writer.Write([]string{
 			strconv.FormatInt(s.Total, 10), strconv.FormatInt(s.Upstream, 10), strconv.FormatInt(s.Dispatch, 10),
 			strconv.FormatInt(s.Auth, 10), strconv.FormatInt(s.Receipt, 10), strconv.FormatInt(s.Handler, 10),
+			strconv.FormatInt(s.ClientConn, 10),
 			strconv.FormatBool(s.Reused), s.Error,
 		})
 		overhead[i], dispatch[i] = s.Total-s.Upstream, s.Dispatch

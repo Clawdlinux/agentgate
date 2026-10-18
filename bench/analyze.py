@@ -33,9 +33,11 @@ def main():
         totals["auth"] += row["auth_ns"]
         totals["receipt"] += row["receipt_ns"]
         totals["other_gateway"] += row["handler_ns"] - row["auth_ns"] - row["receipt_ns"] - row["upstream_ns"]
-        totals["transport_and_response"] += row["total_ns"] - row["dispatch_ns"] - row["handler_ns"]
+        totals["client_connection"] += row.get("client_conn_ns", 0)
+        totals["transport_and_response"] += row["total_ns"] - row["dispatch_ns"] - row["handler_ns"] - row.get("client_conn_ns", 0)
     result = {
         "tail_count": len(tail),
+        "client_connection_timing_available": "client_conn_ns" in rows[0],
         "tail_mean_ms": sum(totals.values()) / len(tail) / 1e6,
         "tail_components": {key: {"mean_ms": value / len(tail) / 1e6,
                                   "share_pct": value / sum(totals.values()) * 100}
@@ -44,6 +46,7 @@ def main():
     if args.trace:
         starts, active, latest, tasks, appends, replies = {}, {}, {}, {}, {}, {}
         durations = collections.defaultdict(list)
+        conn_starts, conn_waits, conn_reused = {}, [], 0
         pauses = []
         pause_start = None
         with open(args.trace) as file:
@@ -70,13 +73,18 @@ def main():
                             appends[task] = (start, timestamp)
                         elif name.startswith("receipt.") and goroutine in active:
                             active[goroutine]["phases"][name] += timestamp - start
-                message = re.search(r'G=(-?\d+) Log Time=\d+ Task=(\d+) Category="([^"]+)" Message="([^"]*)"', line) if " Log " in line else None
+                message = re.search(r'G=(-?\d+) Log Time=(\d+) Task=(\d+) Category="([^"]+)" Message="([^"]*)"', line) if " Log " in line else None
                 if message:
-                    goroutine, task, category, value = message.groups()
+                    goroutine, timestamp, task, category, value = message.groups()
                     if category == "request.id" and value and int(value) >= 0:
                         tasks[int(value)] = task
                     if category == "receipt.reply" and goroutine in latest:
                         replies[task] = latest[goroutine]
+                    if category == "upstream.getconn":
+                        conn_starts[task] = int(timestamp)
+                    if category == "upstream.gotconn" and task in conn_starts:
+                        conn_waits.append(int(timestamp) - conn_starts.pop(task))
+                        conn_reused += value == "true"
                 pause = re.search(r'(RangeBegin|RangeEnd) Time=(\d+) Name="stop-the-world \(GC [^"]+"', line) if "stop-the-world (GC" in line else None
                 if pause:
                     event, timestamp = pause.groups()
@@ -87,6 +95,9 @@ def main():
                         pause_start = None
         result["regions"] = {name: dict(quantiles(values), count=len(values)) for name, values in durations.items()}
         result["gc_stw"] = dict(quantiles([end - start for start, end in pauses]), count=len(pauses)) if pauses else {}
+        if conn_waits:
+            result["upstream_connections"] = dict(quantiles(conn_waits), count=len(conn_waits),
+                                                   reuse_pct=100 * conn_reused / len(conn_waits))
         phases = collections.defaultdict(int)
         matched = 0
         for index in tail:

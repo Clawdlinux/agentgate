@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import signal
 import subprocess
 import time
@@ -33,6 +34,7 @@ def main():
     parser.add_argument("--closed", default="1,16")
     parser.add_argument("--delays", default="0,5ms")
     parser.add_argument("--batch-delay", default="0")
+    parser.add_argument("--foreground", action="store_true", help="clear macOS gateway background policy using taskpolicy")
     args = parser.parse_args()
     root = Path(".cache/proc") / f"{args.label}-{secrets.token_hex(4)}"
     root.mkdir(parents=True)
@@ -63,6 +65,15 @@ def main():
                     process = subprocess.Popen([f".cache/proc/bin/{binary}", *flags], env=env,
                                                stdout=output, stderr=output)
                     processes.append(process)
+                    if binary == "procgateway" and args.foreground:
+                        taskpolicy = shutil.which("taskpolicy")
+                        if taskpolicy is None:
+                            raise RuntimeError("taskpolicy is unavailable")
+                        policy = subprocess.run([taskpolicy, "-B", "-p", str(process.pid)],
+                                                text=True, capture_output=True)
+                        (directory / "taskpolicy.log").write_text(policy.stdout + policy.stderr)
+                        if policy.returncode:
+                            raise RuntimeError("taskpolicy failed; see taskpolicy.log")
                     ready("http://127.0.0.1:" + ("19090" if binary == "mockupstream" else "18080") + "/healthz", process)
                 command = [".cache/proc/bin/loadgen", "-n", str(args.n),
                            "-credentials", str(directory / "key.json"),

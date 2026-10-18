@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/signal"
 	"runtime"
@@ -200,6 +201,15 @@ func main() {
 		ctx, task := trace.NewTask(context.WithValue(r.Context(), timingKey{}, timing), "act")
 		defer task.End()
 		trace.Log(ctx, "request.id", r.Header.Get("X-Bench-ID"))
+		if *profile != "" {
+			traceContext := ctx
+			ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+				GetConn: func(string) { trace.Log(traceContext, "upstream.getconn", "") },
+				GotConn: func(info httptrace.GotConnInfo) {
+					trace.Log(traceContext, "upstream.gotconn", strconv.FormatBool(info.Reused))
+				},
+			})
+		}
 		handler.ServeHTTP(responseWriter{w, timing, time.Now()}, r.WithContext(ctx))
 	})}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
