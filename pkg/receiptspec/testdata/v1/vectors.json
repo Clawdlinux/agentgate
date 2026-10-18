@@ -1,0 +1,225 @@
+{
+  "format_version": 1,
+  "vectors": [
+    {
+      "name": "valid-genesis",
+      "jsonl": "valid-genesis.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 1,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "valid-chain",
+      "jsonl": "valid-chain.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 3,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-partial",
+      "jsonl": "valid-partial.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 2,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "valid-unpinned-prefix",
+      "jsonl": "valid-unpinned-prefix.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 2,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "valid-boundary",
+      "jsonl": "valid-boundary.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 1,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    },
+    {
+      "name": "tampered-body",
+      "jsonl": "tampered-body.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "entry_hash_mismatch",
+        "verified_count": 1,
+        "failed_at_seq": 2,
+        "complete": false
+      }
+    },
+    {
+      "name": "reordered-chain",
+      "jsonl": "reordered-chain.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "sequence_gap_or_not_genesis_anchored",
+        "verified_count": 0,
+        "failed_at_seq": 2,
+        "complete": false
+      }
+    },
+    {
+      "name": "missing-middle",
+      "jsonl": "missing-middle.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "sequence_gap_or_not_genesis_anchored",
+        "verified_count": 1,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "missing-tail-with-manifest",
+      "jsonl": "missing-tail-with-manifest.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "expected_head_mismatch",
+        "verified_count": 2,
+        "failed_at_seq": 3,
+        "complete": false
+      }
+    },
+    {
+      "name": "wrong-key-signature",
+      "jsonl": "wrong-key-signature.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "signature_invalid",
+        "verified_count": 1,
+        "failed_at_seq": 2,
+        "complete": false
+      }
+    },
+    {
+      "name": "bad-prev-hash",
+      "jsonl": "bad-prev-hash.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "prev_hash_mismatch",
+        "verified_count": 1,
+        "failed_at_seq": 2,
+        "complete": false
+      }
+    },
+    {
+      "name": "invalid-fields",
+      "jsonl": "invalid-fields.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "invalid_receipt_fields",
+        "verified_count": 1,
+        "failed_at_seq": 2,
+        "complete": false
+      }
+    },
+    {
+      "name": "unknown-signer",
+      "jsonl": "unknown-signer.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ErrUnknownSignerKID",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "empty-chain",
+      "jsonl": "empty-chain.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ErrEmptyChain",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "inactive-signer",
+      "jsonl": "inactive-signer.jsonl",
+      "keys": "inactive-keys.json",
+      "expected": {
+        "class": "signer_kid_inactive_at_seq",
+        "verified_count": 0,
+        "failed_at_seq": 1,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-mismatch",
+      "jsonl": "manifest-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ManifestError/ErrManifestSignatureInvalid",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-keyset-mismatch",
+      "jsonl": "manifest-keyset-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ManifestError/ErrKeysetDigestMismatch",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-unknown-signer",
+      "jsonl": "manifest-unknown-signer.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ManifestError/ErrUnknownSignerKID",
+        "verified_count": 0,
+        "failed_at_seq": 0,
+        "complete": false
+      }
+    },
+    {
+      "name": "manifest-endpoint-mismatch",
+      "jsonl": "manifest-endpoint-mismatch.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "expected_head_mismatch",
+        "verified_count": 3,
+        "failed_at_seq": 4,
+        "complete": false
+      }
+    },
+    {
+      "name": "valid-unchecked-manifest-count",
+      "jsonl": "valid-unchecked-manifest-count.jsonl",
+      "keys": "public-keys.json",
+      "expected": {
+        "class": "ok",
+        "verified_count": 3,
+        "failed_at_seq": 0,
+        "complete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+{"type":"key","kid":"ed25519:56475aa75463474c","public_key_hex":"03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8","valid_from_seq":1,"valid_until_seq":2}
+{"type":"key","kid":"ed25519:24f6ed6acbfe1009","public_key_hex":"29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7","valid_from_seq":3,"valid_until_seq":null}

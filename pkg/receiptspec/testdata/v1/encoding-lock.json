@@ -1,0 +1,42 @@
+{
+  "valid-boundary": {
+    "receipts": [
+      "393f5d597c088647185b507af322f38730372ae5f722581f98996a1d69c65ade"
+    ],
+    "manifest": "9f159bca2f5d724207008e5e997a4931b68d8fd4f3077358034f24dab74a50f5"
+  },
+  "valid-chain": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2",
+      "559b87ae267e480b80e34aacf5111f94d200c94ef8fa111296965cad3d43b695"
+    ],
+    "manifest": "8e8fb7b9943680a29e9ed35e93ad243d59e2b6ddf3c95c003e2c678d99810155"
+  },
+  "valid-genesis": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138"
+    ]
+  },
+  "valid-partial": {
+    "receipts": [
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2",
+      "559b87ae267e480b80e34aacf5111f94d200c94ef8fa111296965cad3d43b695"
+    ],
+    "manifest": "74a034547f23baccf6b021c8e44bbcc72bd16c032ae649393bbbbc6ef1c3dc40"
+  },
+  "valid-unchecked-manifest-count": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2",
+      "559b87ae267e480b80e34aacf5111f94d200c94ef8fa111296965cad3d43b695"
+    ],
+    "manifest": "965801b7579b6d543114d768ea871ced95867776f73f612bdb3133855b9597e8"
+  },
+  "valid-unpinned-prefix": {
+    "receipts": [
+      "b9647a242fa29e0bbb32d5d3e1157165b4a5ebc24a1b04c71d6f4b4d03cba138",
+      "b2a27707d518092a9fa6b069a0ef1907489ed66ad9ae3196d4bffafe3affcfe2"
+    ]
+  }
+}

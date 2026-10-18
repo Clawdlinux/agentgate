@@ -115,6 +115,8 @@ text output to print only the `PASS:` summary on successful verification.
 
 ### Verify receipts from other producers
 
+The frozen [receipt v1 specification](docs/spec/RECEIPT-v1.md) defines the signed bytes and verification rules.
+
 The receipt protocol lives in a public, standard-library-only Go package:
 [`pkg/receiptspec`](pkg/receiptspec). It holds the receipt type, canonical
 hashing, Ed25519 signing, chain and export verification, and JSONL encoding.
