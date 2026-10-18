@@ -1,5 +1,7 @@
 # Decision records from non-gateway producers
 
+See the frozen [receipt v1 specification](../../docs/spec/RECEIPT-v1.md) for bytes, signatures, and verification limits.
+
 A producer that is not the AgentGate gateway (for example the Clawdlinux
 operator) can record an arbitrary decision as a normal v1 receipt. The wire
 format does not change. Any existing `agentgate-verify` checks the chain.

@@ -8,6 +8,8 @@ Licensed under the Apache License, Version 2.0.
 // canonical hashing, Ed25519 signing, hash-chain verification, JSONL encoding,
 // signed export manifests, and decision-record binding.
 //
+// The frozen wire contract is documented in docs/spec/RECEIPT-v1.md.
+//
 // Any producer (the AgentGate gateway, an operator, a batch job) can build a
 // chain with Chain and any verifier can check it with VerifyChain or
 // VerifyBundle. The on-the-wire format is the same for every producer.
