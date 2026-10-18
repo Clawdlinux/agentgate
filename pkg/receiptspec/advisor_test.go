@@ -14,7 +14,7 @@ func TestAdvisorRecordChecksActionLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	companion := Receipt{Seq: 2, Service: "advisor", Action: "decision:advise", PrevHash: action.EntryHash, PolicyDecision: "deny"}
+	companion := Receipt{Seq: 2, Service: "advisor", Action: "decision:advise", AgentKeyID: AdvisorAgentKeyID, PrevHash: action.EntryHash, PolicyDecision: "deny"}
 	companion.ParamsSHA256, err = HashRecord(json.RawMessage(record))
 	if err != nil {
 		t.Fatal(err)

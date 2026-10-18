@@ -107,6 +107,9 @@ func (r *Registry) LoadBytes(data []byte) error {
 		return fmt.Errorf("registry: parse: %w", err)
 	}
 	for name, svc := range cfg.Services {
+		if strings.EqualFold(name, "advisor") {
+			return errors.New("registry: service advisor is reserved")
+		}
 		if svc.RateLimit != nil {
 			if err := svc.RateLimit.Validate(); err != nil {
 				return fmt.Errorf("registry: service %s: %w", name, err)

@@ -376,6 +376,11 @@ func (s *Server) prepareAttempt(r *http.Request) (*attempt, *immediateResponse) 
 			Code:  "bad_request",
 		}}
 	}
+	if strings.EqualFold(req.Service, "advisor") || strings.HasPrefix(req.Action, "decision:") {
+		return nil, &immediateResponse{status: http.StatusBadRequest, body: ErrorResponse{
+			Error: "reserved internal decision identity", Code: "bad_request",
+		}}
+	}
 
 	params, paramsHash, err := receipt.ParseAndDigestParams(req.Params)
 	if err != nil {

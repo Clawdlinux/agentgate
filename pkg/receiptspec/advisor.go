@@ -9,8 +9,11 @@ import (
 
 var ErrAdvisorBinding = errors.New("receipt: advisor companion binding invalid")
 
+// AdvisorAgentKeyID is reserved for the internal producer, never an authenticated API key.
+const AdvisorAgentKeyID = "agentgate:advisor"
+
 func IsAdvisorReceipt(r Receipt) bool {
-	return r.Service == "advisor" && r.Action == "decision:advise"
+	return r.Service == "advisor" && r.Action == "decision:advise" && r.AgentKeyID == AdvisorAgentKeyID
 }
 
 // AdvisorPolicy maps detailed outcomes to the existing v1 policy enum.
@@ -59,31 +62,62 @@ func BindAdvisorRecord(action Receipt, record []byte) ([]byte, error) {
 }
 
 func VerifyAdvisorRecord(action, companion Receipt, record []byte) error {
-	if !IsAdvisorReceipt(companion) || IsAdvisorReceipt(action) || companion.Seq != action.Seq+1 ||
+	if IsAdvisorReceipt(action) || companion.Seq != action.Seq+1 ||
 		companion.PrevHash != action.EntryHash {
 		return ErrAdvisorBinding
 	}
-	if err := VerifyRecordBinding(companion, record); err != nil {
+	link, err := advisorRecordLink(companion, record)
+	if err != nil {
 		return err
+	}
+	if link != bindingFor(action) {
+		return ErrAdvisorBinding
+	}
+	return nil
+}
+
+// VerifyAdvisorRecordAtAnchor checks a leading companion after its manifest has been authenticated.
+// The anchor commits the action hash, but does not expose its original params digest.
+func VerifyAdvisorRecordAtAnchor(anchor Anchor, companion Receipt, record []byte) error {
+	if anchor.Seq == 0 || companion.Seq != anchor.Seq+1 || companion.PrevHash != anchor.EntryHash {
+		return ErrAdvisorBinding
+	}
+	link, err := advisorRecordLink(companion, record)
+	if err != nil {
+		return err
+	}
+	if link.Seq != strconv.FormatUint(anchor.Seq, 10) || link.EntryHash != hex.EncodeToString(anchor.EntryHash[:]) {
+		return ErrAdvisorBinding
+	}
+	digest, err := hex.DecodeString(link.ParamsSHA256)
+	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != link.ParamsSHA256 {
+		return ErrAdvisorBinding
+	}
+	return nil
+}
+
+func advisorRecordLink(companion Receipt, record []byte) (actionBinding, error) {
+	if !IsAdvisorReceipt(companion) {
+		return actionBinding{}, ErrAdvisorBinding
+	}
+	if err := VerifyRecordBinding(companion, record); err != nil {
+		return actionBinding{}, err
 	}
 	var object struct {
 		ActionReceipt        actionBinding `json:"action_receipt"`
 		OriginalParamsSHA256 string        `json:"original_params_sha256"`
 	}
 	if err := json.Unmarshal(record, &object); err != nil {
-		return err
+		return actionBinding{}, err
 	}
-	if object.ActionReceipt != bindingFor(action) {
-		return ErrAdvisorBinding
-	}
-	if object.OriginalParamsSHA256 != "" && object.OriginalParamsSHA256 != bindingFor(action).ParamsSHA256 {
-		return ErrAdvisorBinding
+	if object.OriginalParamsSHA256 != "" && object.OriginalParamsSHA256 != object.ActionReceipt.ParamsSHA256 {
+		return actionBinding{}, ErrAdvisorBinding
 	}
 	policy, err := AdvisorPolicy(record)
 	if err != nil || policy != companion.PolicyDecision {
-		return ErrAdvisorBinding
+		return actionBinding{}, ErrAdvisorBinding
 	}
-	return nil
+	return object.ActionReceipt, nil
 }
 
 type recordLine struct {

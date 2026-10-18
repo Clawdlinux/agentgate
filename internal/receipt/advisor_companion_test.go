@@ -23,7 +23,7 @@ func TestAdvisorCompanionPreservesActionAndExports(t *testing.T) {
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		w := httptest.NewRecorder()
-		ExportHandler(l.db, store)(w, httptest.NewRequest("GET", "/v1/receipts/export?from=1", nil))
+		ExportHandler(l.db, store)(w, httptest.NewRequest("GET", "/v1/receipts/export?from=1&records=1", nil))
 		if w.Code != 200 {
 			t.Fatal(w.Body.String())
 		}
@@ -35,7 +35,7 @@ func TestAdvisorCompanionPreservesActionAndExports(t *testing.T) {
 			t.Fatalf("missing companion: %+v", bundle)
 		}
 		companion := bundle.Receipts[1]
-		if companion.Service != "advisor" || companion.Action != "decision:advise" || companion.PolicyDecision != "deny" ||
+		if companion.Service != "advisor" || companion.Action != "decision:advise" || companion.AgentKeyID != receiptspec.AdvisorAgentKeyID || companion.PolicyDecision != "deny" ||
 			companion.PrevHash != action.EntryHash {
 			t.Fatal("incorrect companion")
 		}

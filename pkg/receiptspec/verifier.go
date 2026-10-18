@@ -293,8 +293,14 @@ func VerifyBundle(b Bundle, trusted []TrustedKey, expected *ExpectedHead) (Verif
 			seen[r.Seq] = true
 			var bindingErr error
 			if IsAdvisorReceipt(r) {
-				if !exists || i == 0 {
+				if !exists {
 					bindingErr = ErrAdvisorBinding
+				} else if i == 0 {
+					if b.Manifest == nil {
+						bindingErr = ErrAdvisorBinding
+					} else {
+						bindingErr = VerifyAdvisorRecordAtAnchor(anchor, r, record)
+					}
 				} else {
 					bindingErr = VerifyAdvisorRecord(b.Receipts[i-1], r, record)
 				}

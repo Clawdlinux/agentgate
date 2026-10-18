@@ -369,6 +369,7 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 			companion.Seq, companion.PrevHash = head+1, prevHash
 			companion.TimestampUnixNS = uint64(l.nowFn().UnixNano())
 			companion.Service, companion.Action = "advisor", "decision:advise"
+			companion.AgentKeyID = receiptspec.AdvisorAgentKeyID
 			companion.ParamsSHA256, companion.PolicyDecision = digest, policy
 			companion, err = receiptspec.Seal(companion, storeSigner{kid: key.KID, priv: priv})
 			if err != nil {
@@ -398,9 +399,9 @@ func (l *Ledger) commitBatch(batch []appendRequest, key signer.KeyRecord, priv e
 func (l *Ledger) Record(ctx context.Context, seq uint64) (json.RawMessage, error) {
 	var record []byte
 	var digest []byte
-	var service, action string
-	err := l.db.QueryRowContext(ctx, `SELECT e.record_json, r.params_sha256, r.service, r.action
-		FROM receipt_records e JOIN receipts r ON r.seq=e.seq WHERE e.seq=?`, seq).Scan(&record, &digest, &service, &action)
+	var service, action, agentKeyID string
+	err := l.db.QueryRowContext(ctx, `SELECT e.record_json, r.params_sha256, r.service, r.action, r.agent_key_id
+		FROM receipt_records e JOIN receipts r ON r.seq=e.seq WHERE e.seq=?`, seq).Scan(&record, &digest, &service, &action, &agentKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +413,7 @@ func (l *Ledger) Record(ctx context.Context, seq uint64) (json.RawMessage, error
 	if err := receiptspec.VerifyRecordBinding(r, record); err != nil {
 		return nil, err
 	}
-	if service == "advisor" && action == "decision:advise" {
+	if receiptspec.IsAdvisorReceipt(Receipt{Service: service, Action: action, AgentKeyID: agentKeyID}) {
 		current, err := ScanReceiptRow(l.db.QueryRowContext(ctx, "SELECT "+receiptColumns+" FROM receipts WHERE seq=?", seq))
 		if err != nil {
 			return nil, err
