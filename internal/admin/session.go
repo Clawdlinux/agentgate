@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,9 +43,15 @@ type SessionManager struct {
 }
 
 func NewSessionManager(masterKey []byte, publicURL string) *SessionManager {
+	secure := true
+	parsed, err := url.Parse(publicURL)
+	if err == nil && parsed.Scheme == "http" && parsed.User == nil &&
+		(strings.EqualFold(parsed.Hostname(), "localhost") || parsed.Hostname() == "127.0.0.1") {
+		secure = false
+	}
 	return &SessionManager{
 		key:    signer.DerivePurposeKey(masterKey, sessionKeyPurpose),
-		secure: strings.HasPrefix(publicURL, "https://"),
+		secure: secure,
 		now:    time.Now,
 	}
 }
@@ -76,6 +83,8 @@ func (m *SessionManager) CreateCookie(identity SessionIdentity) (*http.Cookie, e
 	}
 	ciphertext := gcm.Seal(nonce, nonce, payload, nil)
 	expiresAt := m.now().Add(sessionTTL)
+	// Secure is disabled only for explicit loopback HTTP development URLs.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    base64.URLEncoding.EncodeToString(ciphertext),
@@ -84,7 +93,7 @@ func (m *SessionManager) CreateCookie(identity SessionIdentity) (*http.Cookie, e
 		MaxAge:   int(sessionTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   m.secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	}, nil
 }
 
@@ -125,6 +134,8 @@ func (m *SessionManager) Authenticate(r *http.Request) (SessionIdentity, error) 
 }
 
 func (m *SessionManager) ClearCookie() *http.Cookie {
+	// Secure is disabled only for explicit loopback HTTP development URLs.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -132,6 +143,6 @@ func (m *SessionManager) ClearCookie() *http.Cookie {
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   m.secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	}
 }

@@ -26,7 +26,7 @@ func TestSessionManagerAuthenticate(t *testing.T) {
 	if identity != (SessionIdentity{AdminID: "admin-1", OrgID: "org-1"}) {
 		t.Fatalf("identity = %#v", identity)
 	}
-	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" {
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
 		t.Fatalf("cookie has unsafe attributes: %#v", cookie)
 	}
 }
@@ -71,16 +71,47 @@ func TestSessionManagerRejectsInvalidSessions(t *testing.T) {
 
 func TestSessionManagerCookieSecurityFollowsPublicURL(t *testing.T) {
 	t.Parallel()
-	manager := NewSessionManager([]byte("dev-key-change-in-production-32b"), "http://localhost:8080")
-	cookie, err := manager.CreateCookie(SessionIdentity{AdminID: "admin-1", OrgID: "org-1"})
-	if err != nil {
-		t.Fatalf("CreateCookie: %v", err)
+	tests := []struct {
+		name       string
+		publicURL  string
+		wantSecure bool
+	}{
+		{name: "https", publicURL: "https://agentgate.example", wantSecure: true},
+		{name: "uppercase https", publicURL: "HTTPS://agentgate.example", wantSecure: true},
+		{name: "https localhost", publicURL: "https://localhost:8080", wantSecure: true},
+		{name: "http localhost", publicURL: "http://localhost:8080"},
+		{name: "http uppercase localhost", publicURL: "http://LOCALHOST:8080"},
+		{name: "http loopback", publicURL: "http://127.0.0.1:8080"},
+		{name: "http remote", publicURL: "http://agentgate.example", wantSecure: true},
+		{name: "http lookalike", publicURL: "http://localhost.example", wantSecure: true},
+		{name: "http userinfo", publicURL: "http://remote@localhost", wantSecure: true},
+		{name: "http ipv6", publicURL: "http://[::1]:8080", wantSecure: true},
+		{name: "missing url", wantSecure: true},
+		{name: "relative url", publicURL: "/localhost", wantSecure: true},
+		{name: "malformed url", publicURL: "http://localhost:%", wantSecure: true},
 	}
-	if cookie.Secure {
-		t.Fatal("http public URL set Secure cookie")
-	}
-	cleared := manager.ClearCookie()
-	if cleared.MaxAge != -1 || !cleared.HttpOnly || cleared.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("ClearCookie = %#v", cleared)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+			manager := NewSessionManager([]byte("dev-key-change-in-production-32b"), test.publicURL)
+			manager.now = func() time.Time { return now }
+			cookie, err := manager.CreateCookie(SessionIdentity{AdminID: "admin-1", OrgID: "org-1"})
+			if err != nil {
+				t.Fatalf("CreateCookie: %v", err)
+			}
+			if cookie.Name != sessionCookieName || cookie.Value == "" ||
+				cookie.MaxAge != int(sessionTTL.Seconds()) || !cookie.Expires.Equal(now.Add(sessionTTL)) {
+				t.Fatalf("CreateCookie = %#v", cookie)
+			}
+			cleared := manager.ClearCookie()
+			if cleared.Name != sessionCookieName || cleared.Value != "" || cleared.MaxAge != -1 {
+				t.Fatalf("ClearCookie = %#v", cleared)
+			}
+			for _, c := range []*http.Cookie{cookie, cleared} {
+				if c.Secure != test.wantSecure || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
+					t.Fatalf("cookie has incorrect attributes: %#v", c)
+				}
+			}
+		})
 	}
 }

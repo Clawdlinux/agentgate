@@ -24,8 +24,11 @@ func TestExportHandler_FullRangeVerifiesOffline(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson" {
+	if ct := w.Result().Header.Get("Content-Type"); ct != "application/x-ndjson" {
 		t.Fatalf("Content-Type = %s, want application/x-ndjson", ct)
+	}
+	if got := w.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 
 	receipts, keys, manifest := parseExportBody(t, w.Body.String())
@@ -122,6 +125,12 @@ func TestExportHandler_InvalidRangesReject400(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", url, w.Code)
 		}
+		if ct := w.Result().Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("%s: Content-Type = %q, want application/json", url, ct)
+		}
+		if got := w.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q, want nosniff", url, got)
+		}
 	}
 }
 
@@ -216,6 +225,29 @@ func TestExportHandler_NoRawParamsOrSensitiveData(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), secret) {
 		t.Fatal("export body contains a raw secret value")
+	}
+}
+
+func TestExportHandler_JSONEncodesReceiptText(t *testing.T) {
+	t.Parallel()
+	ledger, store := newTestLedgerAndStore(t)
+	draft := testDraft("github", "list_repos")
+	draft.HumanPrincipal = "</script><script>alert(\"receipt\")</script>\n{\"injected\":true}"
+	if _, err := ledger.Append(t.Context(), draft); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/receipts/export?from=1", nil)
+	response := httptest.NewRecorder()
+	ExportHandler(ledger.db, store)(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "<script>") {
+		t.Fatal("export contains unescaped HTML")
+	}
+	receipts, _, _ := parseExportBody(t, response.Body.String())
+	if len(receipts) != 1 || receipts[0].HumanPrincipal != draft.HumanPrincipal {
+		t.Fatalf("export changed or injected receipt data: %#v", receipts)
 	}
 }
 

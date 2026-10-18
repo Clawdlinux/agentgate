@@ -59,6 +59,8 @@ func serve(ctx context.Context, input io.Reader, output io.Writer, client *sdk.C
 	scanner.Buffer(make([]byte, 4096), maxLineBytes)
 	encoder := json.NewEncoder(output)
 	for scanner.Scan() {
+		// parseRequest returns a value with an echoable ID on errors, never a nil pointer.
+		// nosemgrep: trailofbits.go.invalid-usage-of-modified-variable.invalid-usage-of-modified-variable
 		req, envelopeError := parseRequest(scanner.Bytes())
 		if envelopeError != nil {
 			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": envelopeError}); err != nil {
