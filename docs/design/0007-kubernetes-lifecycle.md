@@ -49,9 +49,13 @@ Without coverage, report it lost with no known head.
 Intact restarts require recovery and lease checks before resuming.
 Retain PVCs on scale-down. Audit explicit deletion.
 
-Require [0001's external lease and token](0001-per-replica-chains.md) before admission and each batch.
+Check [0001's cached lease view and token](0001-per-replica-chains.md) before admission and each batch, without per-batch API calls.
+Background renewal sets a monotonic self-fencing deadline, approximately 10 seconds with the 5-second/15-second defaults.
+Keep that deadline shorter than lease duration minus maximum clock drift; self-fence when it expires.
 Kubernetes Lease expiry alone does not fence a partitioned node.
 Force-detach requires proven old-node storage fencing, then lease takeover with a newer token.
+Loss declarations and same-UUID takeovers require a `trust_status` cutoff at the last covered head before activation.
+Verifiers reject the affected epoch's suffix beyond that head; a takeover must use a newly certified epoch.
 Unproven fencing blocks takeover.
 
 The only proposed gateway-owned writable state is its WAL data volume.
@@ -129,6 +133,7 @@ Spread constraints can block scheduling. Document installation-specific degraded
 3. Partition a node with active upstream work, expire its lease, then request CSI force-detach.
    Attempt takeover before and after proving storage fencing.
    Acceptance: unfenced takeover fails; replacement tokens increase; the old writer cannot admit or publish.
+   Acceptance: renewal failure self-fences on monotonic deadline; takeover status rejects records beyond the last covered head.
 4. Replace its PVC with an empty one.
    Acceptance: enrolment gates readiness; registry records replacement and old-chain loss.
 5. Drain an SSE stream longer than 40 seconds.

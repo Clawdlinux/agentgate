@@ -89,6 +89,9 @@ Elapsed time alone cannot invalidate historical evidence.
 
 Propose `agentgate keys rotate` at a batch boundary.
 Keep admission open; bounded queues may briefly wait.
+Obtain the next certificate before closing the current epoch.
+If the intermediate is unavailable, remain in the current epoch and alert instead of beginning rotation.
+Continued signing still requires valid lease ownership and no applicable trust-status cutoff.
 After the current batch, append epoch-close and durably seal the final segment descriptor.
 Retain the old key until descriptor and directory fsync.
 Durably activate the next certified epoch and write epoch-open at sequence 1 before queued work.
@@ -103,6 +106,10 @@ Current `Rotate(atSeq)` needs epoch-aware changes; calling `Rotate(1)` is not va
 Revocation policy remains an [owner decision](README.md#open-decisions).
 Recommend intermediate-signed status every 6 hours; `next_update` is 24 hours after issuance.
 Bind revision, predecessor digest, certificate IDs, and revoked epoch or sequence cutoffs.
+Every registry loss declaration or same-UUID lease takeover must issue a cutoff at the last covered head.
+Bind the affected epoch, terminal sequence, and head hash; verifiers reject records beyond that bound.
+Without coverage, sequence 0 rejects the entire affected epoch.
+Publish the cutoff before takeover activation; any continuation requires a newly certified epoch.
 Offline verification reports bundled status as-of time.
 Freshness needs trusted verifier time or a separately pinned status revision.
 Otherwise report freshness unknown, not unseen revocation checks.
@@ -142,6 +149,7 @@ Coordinate manifest hardening without changing frozen v1 encoding.
    Acceptance: out-of-bounds records fail; missing terminal coverage cannot pass as complete.
 4. Test stale, missing, and revoked trust-status bundles without networking.
    Acceptance: report exact revocation scope and unknown freshness without fabricating clock-based trust.
+   Acceptance: loss and takeover reject old-epoch suffixes beyond covered heads; issuer outages preserve the current epoch.
 
 ## Related ADRs
 

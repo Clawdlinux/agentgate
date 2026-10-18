@@ -50,6 +50,7 @@ All certificate and epoch changes remain subject to the frozen v1 compatibility 
 | --- | --- | --- |
 | V2 protocol approval | Assign a protocol owner; approve binary preimages and fixtures before emitting v2. | [0001](0001-per-replica-chains.md), [v2](../spec/RECEIPT-v2.md) |
 | Fencing backend and timing | Kubernetes Lease with registry-allocated tokens; renew every 5 seconds within a 15-second lease. Require storage fencing before takeover. | [0001](0001-per-replica-chains.md), [0007](0007-kubernetes-lifecycle.md) |
+| Registry storage backend | Recommend a CRD backed by cluster etcd for air-gapped Kubernetes. Conditional object storage is an alternative; filesystem export supports offline inspection, not live lease authority. | [0001](0001-per-replica-chains.md) |
 | Issuer custody and renewal | Offline root; local HSM or Vault transit for the intermediate. Renew annually; target epoch rotation every 24 hours. | [0005](0005-root-certified-keys.md) |
 | Revocation scope and freshness | Intermediate-signed status every 6 hours, valid for freshness checks for 24 hours. Use explicit epoch or sequence cutoffs. | [0005](0005-root-certified-keys.md) |
 | SQLite storage model | File per epoch, enabling whole-file archival. A single database instead needs an approved append-only-preserving reclamation migration. | [0003](0003-durable-shipping.md) |
@@ -60,7 +61,7 @@ All certificate and epoch changes remain subject to the frozen v1 compatibility 
 | Replica authorization and vault state | Keep replicas at 1 until local provisioning, credential rotation, and revocation propagation pass cross-replica tests. | [0007](0007-kubernetes-lifecycle.md) |
 | Client retry semantics | Bind client request IDs now. Defer retry deduplication and provider idempotency-key mapping; never automatically replay unknown outcomes. | [0002](0002-two-phase-receipts.md) |
 | Spool failure class | Keep `fail_closed` and reject `fail_open_spool`. Reconsider only after a named fault and independent durability test exist. | [0006](0006-receipt-failure-modes.md) |
-| Added-latency budget | Retain the under-1-ms p99 objective pending owner review. Claim no pass without dedicated Linux measurements. | [0002](0002-two-phase-receipts.md) |
+| Added-latency budget | The owner must re-set the gate. Phase 0 single-phase p99 already exceeds 1 ms at c16: 3.42 ms ([PR #50](https://github.com/Clawdlinux/agentgate/pull/50)). Recommend a measured, concurrency-qualified budget after the tail-latency investigation lands. | [0002](0002-two-phase-receipts.md) |
 | Long-stream rollout policy | Keep the 40-second drain budget. Document stream cuts and expected unknown termination instead of promising uninterrupted SSE. | [0007](0007-kubernetes-lifecycle.md) |
 | Witness policy | Disabled by default. Require explicit local quorum policy before making witness-backed anti-equivocation claims. | [0004](0004-merkle-checkpoints.md) |
 

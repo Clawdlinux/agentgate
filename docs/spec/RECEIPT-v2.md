@@ -40,9 +40,12 @@ No global ordering between replica chains is implied.
 
 Proposed epoch-open records reference the preceding terminal hash and segment digest when available.
 Key rotation creates a new epoch.
-An intact restart resumes its current epoch.
+An intact restart resumes its current epoch unless a loss or takeover cutoff requires another.
 Lost or restored storage requires fencing and a new replica UUID.
 An external epoch lease and monotonic fencing token are checked before admission and each writer batch.
+Use cached ownership and a monotonic renewal deadline, not a per-batch API-server request.
+Self-fence after approximately 10 seconds with 5-second renewals and a 15-second lease.
+The deadline must be shorter than lease duration minus maximum clock drift.
 Bind that token into signed records and descriptors.
 The issuer refuses duplicate `(UUID, epoch)` certification, but a copied certificate still requires lease-based fencing.
 Offline coverage compares inventories with the intermediate-signed replica registry and issued-certificate log.
@@ -133,12 +136,17 @@ Recommend annual intermediate renewal and 24-hour epoch rotation.
 Do not reject historical evidence merely because its time window elapsed.
 
 Rotate at a writer batch boundary without draining admission or inflight calls.
+Obtain the next certificate first; intermediate outages leave the replica in its current epoch and trigger alerts.
+Existing lease and trust-status bounds still govern continued signing.
 Durably seal the old epoch's final descriptor before destroying its key.
 The new epoch starts with epoch-open; later outcomes may reference prior-epoch intents.
 Registry and activation recovery must prevent duplicate issuance or competing active epochs.
 
 Recommend intermediate-signed trust-status statements every 6 hours, with a 24-hour freshness limit.
 Bind revision, predecessor digest, affected certificates, and explicit revocation cutoffs.
+Registry loss declarations and same-UUID lease takeovers require a cutoff at the last covered epoch head.
+Verifiers reject every old-epoch record beyond its sequence and hash boundary; uncovered epochs use a sequence-0 cutoff.
+Persist that status before takeover activation and use a newly certified epoch for continuation.
 Freshness requires trusted verifier time or a separately pinned revision; otherwise report freshness unknown.
 Stale or missing status cannot produce a current-trust success claim.
 Root-signed status handles intermediate replacement.

@@ -40,20 +40,29 @@ Persist a positive, monotonically increasing `epoch` with replica identity.
 The signed epoch-open control record is exactly `seq = 1`, with a zero previous hash.
 The uniqueness key becomes `(chain_id, seq)`.
 
-Intact restarts resume their epoch. Rotation starts another.
+Intact restarts resume their epoch unless a loss or takeover cutoff requires another.
+Rotation starts another epoch.
 Lost storage requires a new UUID, even for reused ordinals.
 There is no total cross-replica execution order.
 
 ### Fencing and Replica Authority
 
-Propose an external epoch lease, checked before admission and every writer batch.
+Propose an external epoch lease with a cached ownership view checked before admission and every writer batch.
 Use a Kubernetes Lease by default. Non-Kubernetes installations may use conditional object updates on an epoch-open lease.
+Renew in the background. Never call the API server per batch.
+Use a monotonic self-fencing deadline, approximately 10 seconds with 5-second renewals and a 15-second lease.
+The deadline must be shorter than lease duration minus maximum clock drift.
+Measure from the start of the last successful renewal attempt, not its delayed acknowledgment.
+Deadline expiry stops admission and signing, including batches still waiting for SQLite.
 The authoritative registry allocates monotonically increasing fencing tokens through compare-and-swap.
 Lease acquisition requires the current workload identity, not merely a copied receipt certificate.
 Include the token in epoch-open, subsequent records, and segment descriptors.
-Lease loss or an uncertain renewal stops admission and further signing.
-Registry handoffs bind the recovered head and token cutover boundary after storage fencing.
-Publishers reject stale writes beyond that boundary, not legitimate historical receipts from the earlier token.
+Confirmed lease loss fences immediately; failed renewals never extend the cached deadline.
+Loss declarations and lease takeovers for the same UUID require an intermediate-signed `trust_status` cutoff at the last covered head.
+Bind chain ID, sequence, and head hash; without coverage, use sequence 0 and the zero hash.
+Verifiers reject every old-epoch record beyond that cutoff, including an unshipped local suffix.
+Persist the cutoff before activating takeover; continue under a newly certified epoch, never beyond the old cutoff.
+Registry handoffs bind that covered head and token boundary after storage fencing.
 Already-dispatched upstream calls cannot be recalled by a lease.
 
 The intermediate issuer refuses to certify the same `(replica UUID, epoch)` twice.
@@ -118,6 +127,7 @@ Epoch resets could hide missing history. Require explicit predecessor references
    Acceptance: concurrent replicas can both emit sequence 1 without collision.
 4. Test concurrent lease acquisition, stale tokens, renewal loss, and copied certificates.
    Acceptance: only the fenced owner admits work; duplicate certificate issuance is refused.
+   Acceptance: cached checks make no per-batch API calls; monotonic deadline expiry fences despite wall-clock changes.
 5. Remove every segment of a registered chain.
    Acceptance: offline coverage reports it lost, rather than silently omitting it.
 6. Interrupt migration and verify both co-signatures.
