@@ -861,14 +861,19 @@ The advisor remains off regardless of these synthetic numbers.
 
 Each action receipt retains `params_sha256 = DigestParams(params)`.
 An adjacent `advisor` / `decision:advise` companion binds the separate evidence record through `HashRecord`.
+Its agent identity is the reserved `agentgate:advisor`.
+Matching names with ordinary agent IDs remain ordinary receipts.
+API requests using reserved names return 400 without writing receipts.
 Both receipts and the record commit in one ledger transaction.
 The companion's signed chain link and record identify the preceding action.
-JSONL exports include the record beside its companion.
+Default JSONL exports remain frozen v1, without record lines.
+Add `&records=1` to opt into evidence records beside their companions.
 Both JSONL and SQLite verification check the record binding and action link.
+Leading companions use the signed manifest anchor when records are included.
 Escalations use existing `deny` and valid `advisor_escalated` error codes.
 Rejected or truncated input requires approval and records `advisor_input_rejected`.
 It cannot use the default unavailable allow fallback.
-The frozen receipt specification and version-lock test are unchanged.
+The frozen receipt rules and version-lock test are unchanged.
 Bundle parsing and verification gained additive record support.
 V1 still cannot prove that every risky action has a companion.
 See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unavailable-evidence limits.
@@ -882,11 +887,17 @@ See the [binding proposal](../docs/spec/proposals/advisor-evidence.md) for unava
 | `semgrep --config auto --error --quiet ./internal ./cmd ./pkg ./services` | PASS |
 | `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s services/decision-advisor -q` | PASS, 12 tests |
 | `PYTHONDONTWRITEBYTECODE=1 python3 bench/advisor/evaluate.py --repeats 20` | PASS, 60 labels and 2,400 measured requests |
-| `git diff bbb46ae --exit-code -- docs/spec/RECEIPT-v1.md pkg/receiptspec/vectors_test.go` | PASS |
+| `git diff 6e8422f --exit-code -- pkg/receiptspec/vectors_test.go` | PASS |
+| Default export comparison against main `494e81b`, on the same ledger | PASS, byte-identical across 4 ranges |
+| Main `494e81b` verifier against the new default export | PASS |
+| Updated verifier against an opt-in export beginning with a companion | PASS |
 
 Regression tests failed before the fixes.
 They reproduced changed gateway digests, size bypass, 4xx allow fallback, and task-confidence spoofing.
 Companion tests cover atomic rollback, export round trips, and altered or missing records.
+Re-review tests first reproduced spoofed identities, poisoned historical names, leading-range rejection, and incompatible default exports.
+They pass after reserving the producer identity and making records opt-in.
+The v1 specification gained only an informative extension cross-reference in section 7.
 Resealed record hashes cannot bypass action sequence, entry hash, or params digest checks.
 The existing deployment fragments were not changed or rerendered in this review.
 Docker image construction was not run. No container runtime result is claimed.

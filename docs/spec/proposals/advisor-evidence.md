@@ -9,6 +9,16 @@ Every gateway action receipt keeps `params_sha256 = DigestParams(params)`.
 Advisor checks, truncation, and unavailable handling never change that digest.
 The advisor is a separate decision producer under [`DECISION.md`](../../../pkg/receiptspec/DECISION.md).
 Only its companion receipt uses `HashRecord(record)`.
+The companion also uses the reserved `AgentKeyID="agentgate:advisor"`.
+Service, action, and this producer ID must all match before verification treats a receipt as an advisor companion.
+Modern API key IDs are 32 lowercase hex characters.
+Authentication rejects the reserved ID for legacy rows and cached identities too.
+Normal agent IDs cannot create this producer identity.
+Older receipts with matching names and ordinary agent IDs remain ordinary receipts.
+
+`prepareAttempt` rejects service `advisor` and actions beginning `decision:` with HTTP 400 and no receipt.
+The service reservation is case-insensitive and also applies during registry loading.
+These checks apply while the advisor is disabled too.
 
 | Advisor outcome | Action policy | Companion policy | Error code |
 | --- | --- | --- | --- |
@@ -44,6 +54,7 @@ No other request can interleave receipts within this pair.
 The record uses a decimal string for the action sequence.
 This preserves the full receipt sequence range under decision-record numeric restrictions.
 The action and companion share the signing-key lease.
+Only the companion's agent identity becomes the reserved producer ID.
 An insertion failure rolls back the entire pair.
 
 Record link:
@@ -91,16 +102,20 @@ The heuristic reports unknown task consistency and low confidence.
 ## Export and verification
 
 Receipt JSONL lines, receipt preimages, and the manifest format stay unchanged.
-Exports add a typed record line immediately after each companion receipt:
+Default exports retain the frozen v1 format and omit record lines.
+Released v0.1.x verifiers can still verify their receipt chains.
+Request `GET /v1/receipts/export?from=1&records=1` to opt into record lines.
+This extension adds a typed record line immediately after each companion receipt:
 
 ```json
 {"type":"record","seq":42,"record":{"outcome":"require_approval","action_receipt":{"seq":"41","entry_hash":"...","params_sha256":"..."}}}
 ```
 
 The manifest counts receipts, not record lines.
-Exports without records keep their existing format.
+The extension is outside the frozen default JSONL format.
 Updated readers accept both existing bundles and the additive record lines.
-Older readers reject the new line type. Update them before verifying advisor bundles.
+Updated advisor evidence verification needs this opt-in export or the SQLite source.
+Older readers reject the extension. Do not send it to them.
 No evidence is hidden inside frozen receipt fields.
 
 The offline JSONL and SQLite verifier checks:
@@ -110,9 +125,15 @@ The offline JSONL and SQLite verifier checks:
 3. The record's action sequence, entry hash, and params digest against the preceding receipt.
 4. Companion adjacency and its coarse outcome mapping.
 
-Missing, duplicate, orphaned, or tampered records fail verification.
-An export range beginning with a companion returns HTTP 400.
-Start that range with its preceding action receipt.
+Missing, duplicate, orphaned, or tampered records fail advisor evidence verification.
+A record-enabled range can start with a companion.
+Its manifest must pass signature verification first.
+The companion's `prev_hash` must equal the signed anchor hash.
+The record's action sequence and entry hash must match the signed anchor sequence and hash.
+No preceding action receipt is needed for those comparisons.
+The anchor does not reveal the original params digest.
+Include the preceding action receipt to compare that digest independently.
+Manifest-less bundles beginning with a companion still fail.
 Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` remains available.
 
 Receipt v1 cannot enforce that every risky action has a companion.

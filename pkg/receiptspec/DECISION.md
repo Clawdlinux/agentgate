@@ -70,16 +70,36 @@ fractional ones fail, so do not rely on that.
 
 The gateway's action receipt always hashes its original params.
 The separate advisor producer uses `Service="advisor"` and `Action="decision:advise"`.
+Its `AgentKeyID` is the reserved `agentgate:advisor`.
+`IsAdvisorReceipt` requires all 3 fields.
+Older receipts with matching names and ordinary agent IDs remain ordinary receipts.
+Modern API key IDs contain 32 lowercase hex characters, so they cannot equal this reserved identity.
+Authentication also rejects the reserved ID in legacy rows and cached identities.
+Requests targeting service `advisor` or actions beginning `decision:` return 400 without a receipt.
+Registry loading rejects the reserved service name.
 Its companion receipt follows the action receipt in the same transaction.
 The decision record includes `action_receipt`, with the preceding sequence, entry hash, and params digest.
 `VerifyAdvisorRecord` checks that link after `VerifyRecordBinding`.
 
-JSONL bundles can add `{"type":"record","seq":42,"record":{...}}` immediately after the corresponding receipt.
-Receipt and manifest encoding stays unchanged.
+The default JSONL export remains the frozen v1 format.
+It omits separate records and remains readable by released v0.1.x chain verifiers.
+Request `GET /v1/receipts/export?from=1&records=1` for the opt-in record extension.
+It adds `{"type":"record","seq":42,"record":{...}}` after the corresponding receipt.
+This line type is outside the [frozen default format](../../docs/spec/RECEIPT-v1.md#7-jsonl-encoding).
+Receipt lines and manifest encoding stay unchanged.
 `Bundle.Records` holds these separate objects.
 `VerifyBundle` rejects missing advisor records, altered bindings, and orphaned records.
-Existing bundles without records still parse.
-Older readers must be updated before reading the new record line type.
+Use the opt-in export or SQLite source for updated advisor evidence verification.
+The default export provides the original chain-verification format, not complete advisor evidence.
+Do not send the extension to older readers.
+
+A record-enabled range can begin with a companion.
+After manifest verification, `VerifyAdvisorRecordAtAnchor` checks its `prev_hash` against the signed anchor hash.
+The record's action sequence and entry hash must match the signed anchor sequence and hash.
+The record still must match the companion's params digest and policy outcome.
+The anchor does not expose the preceding action's params digest.
+Include the action receipt to compare that digest independently.
+A leading companion without a signed manifest fails verification.
 V1 cannot prove that every risky gateway action has an advisor companion.
 
 Go structs, maps, and `json.RawMessage` that carry the same content hash the

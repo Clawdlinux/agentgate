@@ -253,6 +253,12 @@ Those configurable gateway limits do not change receipt encoding.
 
 ## 7. JSONL encoding
 
+> Informative extension note, outside frozen v1:
+> `GET /v1/receipts/export?from=1&records=1` opts into separate `record` lines.
+> This does not expand the frozen default format described below.
+> Default exports remain v1-compatible and contain no `record` lines.
+> See [decision-record bundles](../../pkg/receiptspec/DECISION.md#advisor-producer-and-jsonl-bundles).
+
 `WriteJSONL` emits 1 JSON object per line, followed by LF.
 `MarshalJSONLReceipt` returns the object without LF.
 It does not validate semantic receipt fields before marshaling.

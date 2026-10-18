@@ -378,13 +378,22 @@ Receipt v1 remains unchanged.
 Escalations use `deny` plus `advisor_escalated`.
 Every action receipt keeps its original params digest.
 An immediately following `advisor` / `decision:advise` receipt binds the evidence record.
+It uses the reserved producer ID `agentgate:advisor`, never an authenticated API key.
 Both receipts and the record commit in the same transaction.
 See the [binding proposal](docs/spec/proposals/advisor-evidence.md) for verification and unavailable behavior.
 Admin-authenticated `GET /v1/receipts/{companion_seq}/evidence` returns the record.
-JSONL exports include typed record lines beside companion receipts.
+Default JSONL exports remain byte-compatible with frozen v1 and released v0.1.x verifiers.
+Add `&records=1` to the export URL to include separate evidence records.
 The offline verifier checks record binding and the link to the preceding action receipt.
-Existing exports without records remain compatible. Older readers need updating for the new record line type.
+Updated advisor verification needs the opt-in records or the SQLite source.
+Keep the extension away from older verifiers.
+Record-enabled ranges can start at a companion, using their signed manifest anchor.
 Receipt v1 cannot prove that every risky action has a companion.
+
+Service `advisor` and actions beginning `decision:` are reserved.
+These requests return 400 without a receipt. Registry loading also rejects the reserved service.
+The reservations apply even when the advisor is off.
+Older history with these names and ordinary agent IDs still verifies.
 
 Advisor params have a 256 KiB budget and use JSON without HTML expansion.
 Truncated or rejected input requires approval, regardless of `allow_with_flag`.
