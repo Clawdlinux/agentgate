@@ -1,4 +1,6 @@
-Status: archived. Early overnight-build planning doc. It may not match the current code.
+Status: superseded. This document preserves the initial design.
+See [README](README.md#architecture) and [docs/](docs/) for current behavior.
+
 See [decision-architecture.md](https://github.com/Clawdlinux/agentic-operator-core/blob/main/docs/architecture/decision-architecture.md) (Clawdlinux ADR) for decision layers.
 
 # AgentGate — Architecture Design Document

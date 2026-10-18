@@ -2,10 +2,8 @@ package ratelimit
 
 import (
 	"container/list"
-	"encoding/json"
 	"fmt"
 	"math"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -165,8 +163,8 @@ func New(configs map[string]Config, options ...Option) *Limiter {
 	return l
 }
 
-// Allow preserves the standalone middleware's per-key, per-service contract.
-// Gateway admission uses Check and Acquire instead.
+// Allow checks the per-key, per-service bucket for standalone callers.
+// Gateway admission uses CheckKey and CheckTenant instead.
 func (l *Limiter) Allow(agentKeyID, service string) bool {
 	service = strings.ToLower(service)
 	cfg, ok := l.configs[service]
@@ -280,28 +278,4 @@ func (e *entry) evictable(now time.Time) bool {
 func (l *Limiter) remove(element *list.Element) {
 	delete(l.entries, element.Value.(*entry).key)
 	l.lru.Remove(element)
-}
-
-// Middleware wraps an http.Handler with rate limiting.
-// It requires the agent key ID and service to be extractable from the request.
-// This is a generic middleware that rejects with 429 if rate exceeded.
-func Middleware(limiter *Limiter, extractKeyAndService func(r *http.Request) (string, string)) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			keyID, service := extractKeyAndService(r)
-			if keyID != "" && service != "" {
-				if !limiter.Allow(keyID, service) {
-					w.Header().Set("Content-Type", "application/json")
-					w.Header().Set("Retry-After", "1")
-					w.WriteHeader(http.StatusTooManyRequests)
-					json.NewEncoder(w).Encode(map[string]string{
-						"error": "rate limit exceeded",
-						"code":  "rate_limited",
-					})
-					return
-				}
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
